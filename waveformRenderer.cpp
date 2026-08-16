@@ -4,16 +4,15 @@
 #include <algorithm>
 
 
+// ============================================================
+// Initialize
+// ============================================================
+
 void WaveformRenderer::initialize()
 {
-    glGenVertexArrays(1, &VAO);
-
-    glGenBuffers(1, &VBO);
-
-
-    // -------------------------
-    // Vertex shader
-    // -------------------------
+    // --------------------------------------------------------
+    // Waveform shader
+    // --------------------------------------------------------
 
     const char* vertexShaderSource = R"(
         #version 330 core
@@ -26,13 +25,13 @@ void WaveformRenderer::initialize()
 
         void main()
         {
-            // gl_VertexID is the ACTUAL sample index
-            // because glDrawArrays starts at viewStart.
+            float sampleIndex =
+                float(gl_VertexID);
 
             float x =
                 -1.0 +
                 2.0 *
-                (float(gl_VertexID) - viewStart)
+                (sampleIndex - viewStart)
                 / viewSize;
 
             gl_Position =
@@ -46,10 +45,6 @@ void WaveformRenderer::initialize()
     )";
 
 
-    // -------------------------
-    // Fragment shader
-    // -------------------------
-
     const char* fragmentShaderSource = R"(
         #version 330 core
 
@@ -58,14 +53,19 @@ void WaveformRenderer::initialize()
         void main()
         {
             FragColor =
-                vec4(0.2, 0.8, 1.0, 1.0);
+                vec4(
+                    0.2,
+                    0.8,
+                    1.0,
+                    1.0
+                );
         }
     )";
 
 
-    // -------------------------
-    // Compile vertex shader
-    // -------------------------
+    // --------------------------------------------------------
+    // Compile waveform vertex shader
+    // --------------------------------------------------------
 
     GLuint vertexShader =
         glCreateShader(GL_VERTEX_SHADER);
@@ -80,9 +80,9 @@ void WaveformRenderer::initialize()
     glCompileShader(vertexShader);
 
 
-    // -------------------------
-    // Compile fragment shader
-    // -------------------------
+    // --------------------------------------------------------
+    // Compile waveform fragment shader
+    // --------------------------------------------------------
 
     GLuint fragmentShader =
         glCreateShader(GL_FRAGMENT_SHADER);
@@ -97,9 +97,9 @@ void WaveformRenderer::initialize()
     glCompileShader(fragmentShader);
 
 
-    // -------------------------
-    // Create shader program
-    // -------------------------
+    // --------------------------------------------------------
+    // Create waveform shader program
+    // --------------------------------------------------------
 
     shaderProgram =
         glCreateProgram();
@@ -114,23 +114,44 @@ void WaveformRenderer::initialize()
         fragmentShader
     );
 
-    glLinkProgram(shaderProgram);
+    glLinkProgram(
+        shaderProgram
+    );
 
 
-    glDeleteShader(vertexShader);
-    glDeleteShader(fragmentShader);
+    glDeleteShader(
+        vertexShader
+    );
+
+    glDeleteShader(
+        fragmentShader
+    );
 
 
-    // -------------------------
-    // Configure VAO
-    // -------------------------
+    // --------------------------------------------------------
+    // Create waveform VAO
+    // --------------------------------------------------------
 
-    glBindVertexArray(VAO);
+    glGenVertexArrays(
+        1,
+        &VAO
+    );
+
+    glGenBuffers(
+        1,
+        &VBO
+    );
+
+
+    glBindVertexArray(
+        VAO
+    );
 
     glBindBuffer(
         GL_ARRAY_BUFFER,
         VBO
     );
+
 
     glVertexAttribPointer(
         0,
@@ -143,20 +164,204 @@ void WaveformRenderer::initialize()
 
     glEnableVertexAttribArray(0);
 
+
+    glBindVertexArray(0);
+
+
+    // ========================================================
+    // Selection shader
+    // ========================================================
+
+    const char* selectionVertexShaderSource = R"(
+        #version 330 core
+
+        layout (location = 0) in vec2 position;
+
+        void main()
+        {
+            gl_Position =
+                vec4(
+                    position,
+                    0.0,
+                    1.0
+                );
+        }
+    )";
+
+
+    const char* selectionFragmentShaderSource = R"(
+        #version 330 core
+
+        out vec4 FragColor;
+
+        void main()
+        {
+            FragColor =
+                vec4(
+                    1.0,
+                    0.3,
+                    0.2,
+                    1.0
+                );
+        }
+    )";
+
+
+    // --------------------------------------------------------
+    // Compile selection vertex shader
+    // --------------------------------------------------------
+
+    GLuint selectionVertexShader =
+        glCreateShader(
+            GL_VERTEX_SHADER
+        );
+
+    glShaderSource(
+        selectionVertexShader,
+        1,
+        &selectionVertexShaderSource,
+        nullptr
+    );
+
+    glCompileShader(
+        selectionVertexShader
+    );
+
+
+    // --------------------------------------------------------
+    // Compile selection fragment shader
+    // --------------------------------------------------------
+
+    GLuint selectionFragmentShader =
+        glCreateShader(
+            GL_FRAGMENT_SHADER
+        );
+
+    glShaderSource(
+        selectionFragmentShader,
+        1,
+        &selectionFragmentShaderSource,
+        nullptr
+    );
+
+    glCompileShader(
+        selectionFragmentShader
+    );
+
+
+    // --------------------------------------------------------
+    // Create selection shader program
+    // --------------------------------------------------------
+
+    selectionShader =
+        glCreateProgram();
+
+    glAttachShader(
+        selectionShader,
+        selectionVertexShader
+    );
+
+    glAttachShader(
+        selectionShader,
+        selectionFragmentShader
+    );
+
+    glLinkProgram(
+        selectionShader
+    );
+
+
+    glDeleteShader(
+        selectionVertexShader
+    );
+
+    glDeleteShader(
+        selectionFragmentShader
+    );
+
+
+    // --------------------------------------------------------
+    // Create selection VAO and VBO
+    // --------------------------------------------------------
+
+    glGenVertexArrays(
+        1,
+        &selectionVAO
+    );
+
+    glGenBuffers(
+        1,
+        &selectionVBO
+    );
+
+
+    glBindVertexArray(
+        selectionVAO
+    );
+
+    glBindBuffer(
+        GL_ARRAY_BUFFER,
+        selectionVBO
+    );
+
+
+    // Space for 4 vertices:
+    //
+    // start bottom
+    // start top
+    // end bottom
+    // end top
+    //
+
+    glBufferData(
+        GL_ARRAY_BUFFER,
+        8 * sizeof(float),
+        nullptr,
+        GL_DYNAMIC_DRAW
+    );
+
+
+    glVertexAttribPointer(
+        0,
+        2,
+        GL_FLOAT,
+        GL_FALSE,
+        2 * sizeof(float),
+        nullptr
+    );
+
+    glEnableVertexAttribArray(0);
+
+
     glBindVertexArray(0);
 }
 
 
+// ============================================================
+// Upload samples
+// ============================================================
+
 void WaveformRenderer::uploadSamples(
-    const std::vector<float>& samples)
+    const std::vector<float>& samples
+)
 {
     sampleCount =
-        static_cast<int>(samples.size());
+        static_cast<int>(
+            samples.size()
+        );
+
+
+    if (sampleCount == 0)
+    {
+        return;
+    }
+
 
     glBindBuffer(
         GL_ARRAY_BUFFER,
         VBO
     );
+
 
     glBufferData(
         GL_ARRAY_BUFFER,
@@ -165,11 +370,27 @@ void WaveformRenderer::uploadSamples(
         GL_STATIC_DRAW
     );
 
-    // Start by showing the entire file
+
+    glBindBuffer(
+        GL_ARRAY_BUFFER,
+        0
+    );
+
+
+    // Start by showing the whole audio file.
+
     viewStart = 0.0f;
-    viewSize = static_cast<float>(sampleCount);
+
+    viewSize =
+        static_cast<float>(
+            sampleCount
+        );
 }
 
+
+// ============================================================
+// Draw
+// ============================================================
 
 void WaveformRenderer::draw()
 {
@@ -178,12 +399,19 @@ void WaveformRenderer::draw()
         return;
     }
 
-    glUseProgram(shaderProgram);
+
+    // ========================================================
+    // Draw waveform
+    // ========================================================
+
+    glUseProgram(
+        shaderProgram
+    );
 
 
-    // ------------------------------------------------
-    // Send view information to the shader
-    // ------------------------------------------------
+    // --------------------------------------------------------
+    // Send view information to shader
+    // --------------------------------------------------------
 
     GLint startLocation =
         glGetUniformLocation(
@@ -191,11 +419,13 @@ void WaveformRenderer::draw()
             "viewStart"
         );
 
+
     GLint sizeLocation =
         glGetUniformLocation(
             shaderProgram,
             "viewSize"
         );
+
 
     GLint countLocation =
         glGetUniformLocation(
@@ -209,116 +439,427 @@ void WaveformRenderer::draw()
         viewStart
     );
 
+
     glUniform1f(
         sizeLocation,
         viewSize
     );
 
+
     glUniform1f(
         countLocation,
-        static_cast<float>(sampleCount)
+        static_cast<float>(
+            sampleCount
+        )
     );
 
 
-    // ------------------------------------------------
+    // --------------------------------------------------------
     // Bind waveform
-    // ------------------------------------------------
+    // --------------------------------------------------------
 
-    glBindVertexArray(VAO);
+    glBindVertexArray(
+        VAO
+    );
 
 
-    // Determine how many samples are visible
     int samplesToDraw =
         static_cast<int>(
             std::min(
                 viewSize,
-                static_cast<float>(sampleCount)
+                static_cast<float>(
+                    sampleCount
+                )
             )
         );
 
 
-    // ------------------------------------------------
-    // Draw starting at viewStart
-    // ------------------------------------------------
+    // --------------------------------------------------------
+    // Draw waveform
+    // --------------------------------------------------------
 
     glDrawArrays(
         GL_LINE_STRIP,
-        static_cast<GLint>(viewStart),
+        static_cast<GLint>(
+            viewStart
+        ),
         samplesToDraw
     );
 
 
     glBindVertexArray(0);
+
+
+    // ========================================================
+    // Draw selection lines
+    // ========================================================
+
+    if (hasSelection)
+    {
+        // Convert sample positions into
+        // OpenGL coordinates.
+
+        float startX =
+            -1.0f +
+            2.0f *
+            (
+                selectionStart -
+                viewStart
+            )
+            / viewSize;
+
+
+        float endX =
+            -1.0f +
+            2.0f *
+            (
+                selectionEnd -
+                viewStart
+            )
+            / viewSize;
+
+
+        float linePositions[] =
+        {
+            // Start line
+            startX, -1.0f,
+            startX,  1.0f,
+
+            // End line
+            endX, -1.0f,
+            endX,  1.0f
+        };
+
+
+        // ----------------------------------------------------
+        // Upload line positions
+        // ----------------------------------------------------
+
+        glBindBuffer(
+            GL_ARRAY_BUFFER,
+            selectionVBO
+        );
+
+
+        glBufferSubData(
+            GL_ARRAY_BUFFER,
+            0,
+            sizeof(linePositions),
+            linePositions
+        );
+
+
+        // ----------------------------------------------------
+        // Draw selection
+        // ----------------------------------------------------
+
+        glUseProgram(
+            selectionShader
+        );
+
+
+        glBindVertexArray(
+            selectionVAO
+        );
+
+
+        glLineWidth(2.0f);
+
+
+        glDrawArrays(
+            GL_LINES,
+            0,
+            4
+        );
+
+
+        glBindVertexArray(0);
+
+        glBindBuffer(
+            GL_ARRAY_BUFFER,
+            0
+        );
+    }
 }
 
 
-void WaveformRenderer::zoom(float amount, float mouseX)
+// ============================================================
+// Zoom
+// ============================================================
+
+void WaveformRenderer::zoom(
+    float amount,
+    float mouseX
+)
 {
     if (sampleCount <= 0)
     {
         return;
     }
 
-    // Convert mouse position from OpenGL coordinates
-    // (-1 to +1) into a percentage of the waveform
-    // (0 to 1).
+
+    // Convert mouse position from
+    // OpenGL coordinates into a position
+    // within the current view.
+
     float mousePosition =
-        (mouseX + 1.0f) / 2.0f;
-
-
-    // Find which audio sample is currently
-    // underneath the mouse.
-    float sampleUnderMouse =
         viewStart +
-        mousePosition * viewSize;
+        (
+            (mouseX + 1.0f)
+            / 2.0f
+        )
+        * viewSize;
 
 
-    // Calculate the new zoom level.
-    float newViewSize =
-        viewSize * amount;
+    // Change zoom level.
+
+    viewSize *= amount;
 
 
-    // Don't zoom farther out than the entire file.
-    if (newViewSize > sampleCount)
+    // Don't zoom farther out than
+    // the entire audio file.
+
+    if (viewSize > sampleCount)
     {
-        newViewSize =
-            static_cast<float>(sampleCount);
+        viewSize =
+            static_cast<float>(
+                sampleCount
+            );
     }
 
 
-    // Don't zoom closer than 2 samples.
-    if (newViewSize < 2.0f)
+    // Don't zoom farther in than
+    // two samples.
+
+    if (viewSize < 2.0f)
     {
-        newViewSize = 2.0f;
+        viewSize = 2.0f;
     }
 
 
-    // Move the view so the SAME audio sample
-    // stays underneath the mouse.
+    // Keep the mouse position
+    // underneath the cursor.
+
+    float mouseRatio =
+        (
+            mouseX + 1.0f
+        )
+        / 2.0f;
+
+
     viewStart =
-        sampleUnderMouse -
-        mousePosition * newViewSize;
+        mousePosition -
+        mouseRatio * viewSize;
 
 
-    // Keep the view inside the audio.
+    // Keep view inside audio.
+
     if (viewStart < 0.0f)
     {
         viewStart = 0.0f;
     }
 
-    if (viewStart + newViewSize > sampleCount)
+
+    if (viewStart + viewSize >
+        sampleCount)
     {
         viewStart =
-            sampleCount - newViewSize;
+            sampleCount -
+            viewSize;
     }
 
 
-    // Finally apply the new zoom level.
-    viewSize = newViewSize;
+    if (viewStart < 0.0f)
+    {
+        viewStart = 0.0f;
+    }
 }
 
 
-void WaveformRenderer::setWindowWidth(int width)
+// ============================================================
+// Pan
+// ============================================================
+
+void WaveformRenderer::pan(
+    float amount
+)
+{
+    viewStart += amount;
+
+
+    if (viewStart < 0.0f)
+    {
+        viewStart = 0.0f;
+    }
+
+
+    if (viewStart + viewSize >
+        sampleCount)
+    {
+        viewStart =
+            sampleCount -
+            viewSize;
+    }
+}
+
+
+// ============================================================
+// Window width
+// ============================================================
+
+void WaveformRenderer::setWindowWidth(
+    int width
+)
 {
     windowWidth = width;
+}
+
+
+// ============================================================
+// Start selection
+// ============================================================
+
+void WaveformRenderer::startSelection(
+    float mouseX
+)
+{
+    if (sampleCount <= 0)
+    {
+        return;
+    }
+
+
+    float normalizedPosition =
+        (mouseX + 1.0f) / 2.0f;
+
+
+    selectionStart =
+        viewStart +
+        normalizedPosition *
+        viewSize;
+
+
+    selectionEnd =
+        selectionStart;
+
+
+    // Keep inside audio.
+
+    if (selectionStart < 0.0f)
+    {
+        selectionStart = 0.0f;
+    }
+
+
+    if (selectionStart >
+        sampleCount)
+    {
+        selectionStart =
+            static_cast<float>(
+                sampleCount
+            );
+    }
+
+
+    selecting = true;
+
+    hasSelection = true;
+}
+
+
+// ============================================================
+// Update selection
+// ============================================================
+
+void WaveformRenderer::updateSelection(
+    float mouseX
+)
+{
+    if (!selecting)
+    {
+        return;
+    }
+
+
+    float normalizedPosition =
+        (mouseX + 1.0f) / 2.0f;
+
+
+    selectionEnd =
+        viewStart +
+        normalizedPosition *
+        viewSize;
+
+
+    // Keep inside audio.
+
+    if (selectionEnd < 0.0f)
+    {
+        selectionEnd = 0.0f;
+    }
+
+
+    if (selectionEnd >
+        sampleCount)
+    {
+        selectionEnd =
+            static_cast<float>(
+                sampleCount
+            );
+    }
+}
+
+
+// ============================================================
+// Finish selection
+// ============================================================
+
+void WaveformRenderer::finishSelection(
+    float mouseX
+)
+{
+    if (!selecting)
+    {
+        return;
+    }
+
+
+    updateSelection(mouseX);
+
+
+    selecting = false;
+
+
+    // Make sure start is smaller
+    // than end.
+
+    if (selectionStart >
+        selectionEnd)
+    {
+        std::swap(
+            selectionStart,
+            selectionEnd
+        );
+    }
+
+
+    std::cout
+        << "Selection: samples "
+        << static_cast<int>(
+            selectionStart
+        )
+        << " to "
+        << static_cast<int>(
+            selectionEnd
+        )
+        << "\n";
+
+
+    std::cout
+        << "Selected "
+        << static_cast<int>(
+            selectionEnd -
+            selectionStart
+        )
+        << " samples.\n";
 }

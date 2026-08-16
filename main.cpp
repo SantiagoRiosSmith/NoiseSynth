@@ -67,6 +67,7 @@ void scrollCallback(
 
 
     // Get mouse position
+
     double mouseX;
     double mouseY;
 
@@ -78,6 +79,7 @@ void scrollCallback(
 
 
     // Get window size
+
     int windowWidth;
     int windowHeight;
 
@@ -98,11 +100,14 @@ void scrollCallback(
 
     float normalizedMouseX =
         static_cast<float>(
-            (mouseX / windowWidth) * 2.0 - 1.0
+            (mouseX / windowWidth)
+            * 2.0
+            - 1.0
         );
 
 
     // Zoom in
+
     if (yOffset > 0)
     {
         waveformPtr->zoom(
@@ -113,6 +118,7 @@ void scrollCallback(
 
 
     // Zoom out
+
     else if (yOffset < 0)
     {
         waveformPtr->zoom(
@@ -120,6 +126,148 @@ void scrollCallback(
             normalizedMouseX
         );
     }
+}
+
+
+// ============================================================
+// MOUSE BUTTON CALLBACK
+// ============================================================
+
+void mouseButtonCallback(
+    GLFWwindow* window,
+    int button,
+    int action,
+    int mods)
+{
+    if (waveformPtr == nullptr)
+    {
+        return;
+    }
+
+
+    // We only care about the
+    // left mouse button.
+
+    if (button != GLFW_MOUSE_BUTTON_LEFT)
+    {
+        return;
+    }
+
+
+    // Get current mouse position.
+
+    double mouseX;
+    double mouseY;
+
+    glfwGetCursorPos(
+        window,
+        &mouseX,
+        &mouseY
+    );
+
+
+    // Get window dimensions.
+
+    int windowWidth;
+    int windowHeight;
+
+    glfwGetWindowSize(
+        window,
+        &windowWidth,
+        &windowHeight
+    );
+
+
+    // Convert mouse X:
+    //
+    // 0 ---------------- windowWidth
+    //
+    // into:
+    //
+    // -1 ---------------- 1
+
+    float normalizedMouseX =
+        static_cast<float>(
+            (mouseX / windowWidth)
+            * 2.0
+            - 1.0
+        );
+
+
+    // --------------------------------------------------------
+    // Mouse pressed
+    // --------------------------------------------------------
+
+    if (action == GLFW_PRESS)
+    {
+        waveformPtr->startSelection(
+            normalizedMouseX
+        );
+    }
+
+
+    // --------------------------------------------------------
+    // Mouse released
+    // --------------------------------------------------------
+
+    else if (action == GLFW_RELEASE)
+    {
+        waveformPtr->finishSelection(
+            normalizedMouseX
+        );
+    }
+}
+
+
+// ============================================================
+// MOUSE MOVEMENT CALLBACK
+// ============================================================
+
+void cursorPositionCallback(
+    GLFWwindow* window,
+    double mouseX,
+    double mouseY)
+{
+    if (waveformPtr == nullptr)
+    {
+        return;
+    }
+
+
+    // Get window dimensions.
+
+    int windowWidth;
+    int windowHeight;
+
+    glfwGetWindowSize(
+        window,
+        &windowWidth,
+        &windowHeight
+    );
+
+
+    // Convert mouse X:
+    //
+    // 0 ---------------- windowWidth
+    //
+    // into:
+    //
+    // -1 ---------------- 1
+
+    float normalizedMouseX =
+        static_cast<float>(
+            (mouseX / windowWidth)
+            * 2.0
+            - 1.0
+        );
+
+
+    // Update selection while
+    // the mouse is being dragged.
+
+    waveformPtr->updateSelection(
+        normalizedMouseX
+    );
 }
 
 
@@ -137,10 +285,12 @@ int main()
 
     if (filePath.empty())
     {
-        std::cout << "No file selected.\n";
+        std::cout
+            << "No file selected.\n";
 
         return 0;
     }
+
 
     std::cout
         << "Selected file: "
@@ -162,6 +312,7 @@ int main()
 
 
     // OpenGL version 3.3
+
     glfwWindowHint(
         GLFW_CONTEXT_VERSION_MAJOR,
         3
@@ -191,6 +342,7 @@ int main()
             nullptr
         );
 
+
     if (!window)
     {
         std::cerr
@@ -202,8 +354,11 @@ int main()
     }
 
 
-    // Make this OpenGL context current
-    glfwMakeContextCurrent(window);
+    // Make OpenGL context current.
+
+    glfwMakeContextCurrent(
+        window
+    );
 
 
     // ========================================================
@@ -211,12 +366,15 @@ int main()
     // ========================================================
 
     if (!gladLoadGL(
-        (GLADloadfunc)glfwGetProcAddress))
+        (GLADloadfunc)
+        glfwGetProcAddress))
     {
         std::cerr
             << "Failed to initialize GLAD\n";
 
-        glfwDestroyWindow(window);
+        glfwDestroyWindow(
+            window
+        );
 
         glfwTerminate();
 
@@ -233,16 +391,30 @@ int main()
     waveform.initialize();
 
 
-    // Give the scroll callback access to our waveform
+    // Give callbacks access to waveform.
+
     waveformPtr = &waveform;
 
 
-    // Tell GLFW to call scrollCallback
-    // whenever the mouse wheel moves
+    // ========================================================
+    // Register mouse callbacks
+    // ========================================================
 
     glfwSetScrollCallback(
         window,
         scrollCallback
+    );
+
+
+    glfwSetMouseButtonCallback(
+        window,
+        mouseButtonCallback
+    );
+
+
+    glfwSetCursorPosCallback(
+        window,
+        cursorPositionCallback
     );
 
 
@@ -251,6 +423,7 @@ int main()
     // ========================================================
 
     WavFile audio;
+
 
     if (audio.load(filePath))
     {
@@ -282,6 +455,7 @@ int main()
             1.0f
         );
 
+
         glClear(
             GL_COLOR_BUFFER_BIT
         );
@@ -298,10 +472,14 @@ int main()
         // Display frame
         // ----------------------------------------------------
 
-        glfwSwapBuffers(window);
+        glfwSwapBuffers(
+            window
+        );
 
 
-        // Process keyboard / mouse / window events
+        // Process keyboard,
+        // mouse and window events.
+
         glfwPollEvents();
     }
 
@@ -310,9 +488,12 @@ int main()
     // Cleanup
     // ========================================================
 
-    glfwDestroyWindow(window);
+    glfwDestroyWindow(
+        window
+    );
 
     glfwTerminate();
+
 
     return 0;
 }

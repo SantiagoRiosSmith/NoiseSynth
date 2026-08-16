@@ -15,25 +15,63 @@ public:
 
     void draw();
 
-    void zoom(float amount, float mouseX);
+    // Zoom
+    void zoom(
+        float amount,
+        float mouseX
+    );
 
+    // Pan
     void pan(float amount);
 
     void setWindowWidth(int width);
+
+
+    // ------------------------------------------------
+    // Selection
+    // ------------------------------------------------
+
+    void startSelection(float mouseX);
+
+    void updateSelection(float mouseX);
+
+    void finishSelection(float mouseX);
+
 
 private:
 
     GLuint VAO = 0;
     GLuint VBO = 0;
+
     GLuint shaderProgram = 0;
+
+    GLuint selectionVAO = 0;
+    GLuint selectionVBO = 0;
+    GLuint selectionShader = 0;
 
     int sampleCount = 0;
 
-    // First sample currently visible
+
+    // ------------------------------------------------
+    // View
+    // ------------------------------------------------
+
     float viewStart = 0.0f;
 
-    // Number of samples visible
     float viewSize = 10000.0f;
 
     int windowWidth = 1000;
+
+
+    // ------------------------------------------------
+    // Selection
+    // ------------------------------------------------
+
+    bool selecting = false;
+
+    bool hasSelection = false;
+
+    float selectionStart = 0.0f;
+
+    float selectionEnd = 0.0f;
 };
