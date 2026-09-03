@@ -1,11 +1,127 @@
 #include "WaveformRenderer.h"
 
-#include <iostream>
 #include <algorithm>
+#include <cmath>
+#include <iostream>
+#include <limits>
+#include <string>
 
 
 // ============================================================
-// Initialize
+// Shader helpers
+// ============================================================
+
+static GLuint compileShader(
+    GLenum type,
+    const char* source
+)
+{
+    GLuint shader = glCreateShader(type);
+
+    glShaderSource(
+        shader,
+        1,
+        &source,
+        nullptr
+    );
+
+    glCompileShader(shader);
+
+    GLint success = 0;
+
+    glGetShaderiv(
+        shader,
+        GL_COMPILE_STATUS,
+        &success
+    );
+
+    if (!success)
+    {
+        char infoLog[512];
+
+        glGetShaderInfoLog(
+            shader,
+            512,
+            nullptr,
+            infoLog
+        );
+
+        std::cerr
+            << "Shader compilation failed:\n"
+            << infoLog
+            << std::endl;
+    }
+
+    return shader;
+}
+
+
+static GLuint createProgram(
+    const char* vertexSource,
+    const char* fragmentSource
+)
+{
+    GLuint vertexShader =
+        compileShader(
+            GL_VERTEX_SHADER,
+            vertexSource
+        );
+
+    GLuint fragmentShader =
+        compileShader(
+            GL_FRAGMENT_SHADER,
+            fragmentSource
+        );
+
+    GLuint program =
+        glCreateProgram();
+
+    glAttachShader(
+        program,
+        vertexShader
+    );
+
+    glAttachShader(
+        program,
+        fragmentShader
+    );
+
+    glLinkProgram(program);
+
+    GLint success = 0;
+
+    glGetProgramiv(
+        program,
+        GL_LINK_STATUS,
+        &success
+    );
+
+    if (!success)
+    {
+        char infoLog[512];
+
+        glGetProgramInfoLog(
+            program,
+            512,
+            nullptr,
+            infoLog
+        );
+
+        std::cerr
+            << "Shader linking failed:\n"
+            << infoLog
+            << std::endl;
+    }
+
+    glDeleteShader(vertexShader);
+    glDeleteShader(fragmentShader);
+
+    return program;
+}
+
+
+// ============================================================
+// Initialization
 // ============================================================
 
 void WaveformRenderer::initialize()
@@ -14,19 +130,17 @@ void WaveformRenderer::initialize()
     // Waveform shader
     // --------------------------------------------------------
 
-    const char* vertexShaderSource = R"(
+    const char* waveformVertexShader = R"(
         #version 330 core
 
         layout (location = 0) in float amplitude;
 
         uniform float viewStart;
         uniform float viewSize;
-        uniform float sampleCount;
 
         void main()
         {
-            float sampleIndex =
-                float(gl_VertexID);
+            float sampleIndex = float(gl_VertexID);
 
             float x =
                 -1.0 +
@@ -45,7 +159,7 @@ void WaveformRenderer::initialize()
     )";
 
 
-    const char* fragmentShaderSource = R"(
+    const char* waveformFragmentShader = R"(
         #version 330 core
 
         out vec4 FragColor;
@@ -54,82 +168,24 @@ void WaveformRenderer::initialize()
         {
             FragColor =
                 vec4(
-                    0.2,
                     0.8,
-                    1.0,
+                    0.8,
+                    0.8,
                     1.0
                 );
         }
     )";
 
 
-    // --------------------------------------------------------
-    // Compile waveform vertex shader
-    // --------------------------------------------------------
-
-    GLuint vertexShader =
-        glCreateShader(GL_VERTEX_SHADER);
-
-    glShaderSource(
-        vertexShader,
-        1,
-        &vertexShaderSource,
-        nullptr
-    );
-
-    glCompileShader(vertexShader);
-
-
-    // --------------------------------------------------------
-    // Compile waveform fragment shader
-    // --------------------------------------------------------
-
-    GLuint fragmentShader =
-        glCreateShader(GL_FRAGMENT_SHADER);
-
-    glShaderSource(
-        fragmentShader,
-        1,
-        &fragmentShaderSource,
-        nullptr
-    );
-
-    glCompileShader(fragmentShader);
-
-
-    // --------------------------------------------------------
-    // Create waveform shader program
-    // --------------------------------------------------------
-
     shaderProgram =
-        glCreateProgram();
-
-    glAttachShader(
-        shaderProgram,
-        vertexShader
-    );
-
-    glAttachShader(
-        shaderProgram,
-        fragmentShader
-    );
-
-    glLinkProgram(
-        shaderProgram
-    );
-
-
-    glDeleteShader(
-        vertexShader
-    );
-
-    glDeleteShader(
-        fragmentShader
-    );
+        createProgram(
+            waveformVertexShader,
+            waveformFragmentShader
+        );
 
 
     // --------------------------------------------------------
-    // Create waveform VAO
+    // Waveform VAO/VBO
     // --------------------------------------------------------
 
     glGenVertexArrays(
@@ -142,16 +198,19 @@ void WaveformRenderer::initialize()
         &VBO
     );
 
-
-    glBindVertexArray(
-        VAO
-    );
+    glBindVertexArray(VAO);
 
     glBindBuffer(
         GL_ARRAY_BUFFER,
         VBO
     );
 
+    glBufferData(
+        GL_ARRAY_BUFFER,
+        0,
+        nullptr,
+        GL_DYNAMIC_DRAW
+    );
 
     glVertexAttribPointer(
         0,
@@ -164,15 +223,14 @@ void WaveformRenderer::initialize()
 
     glEnableVertexAttribArray(0);
 
-
     glBindVertexArray(0);
 
 
-    // ========================================================
-    // Selection shader
-    // ========================================================
+    // --------------------------------------------------------
+    // Highlight shader
+    // --------------------------------------------------------
 
-    const char* selectionVertexShaderSource = R"(
+    const char* highlightVertexShader = R"(
         #version 330 core
 
         layout (location = 0) in vec2 position;
@@ -189,7 +247,7 @@ void WaveformRenderer::initialize()
     )";
 
 
-    const char* selectionFragmentShaderSource = R"(
+    const char* highlightFragmentShader = R"(
         #version 330 core
 
         out vec4 FragColor;
@@ -198,91 +256,78 @@ void WaveformRenderer::initialize()
         {
             FragColor =
                 vec4(
-                    1.0,
-                    0.3,
+                    0.1,
+                    0.8,
                     0.2,
+                    0.20
+                );
+        }
+    )";
+
+
+    highlightShader =
+        createProgram(
+            highlightVertexShader,
+            highlightFragmentShader
+        );
+
+
+    glGenVertexArrays(
+        1,
+        &highlightVAO
+    );
+
+    glGenBuffers(
+        1,
+        &highlightVBO
+    );
+
+
+    // --------------------------------------------------------
+    // Selection shader
+    // --------------------------------------------------------
+
+    const char* selectionVertexShader = R"(
+        #version 330 core
+
+        layout (location = 0) in vec2 position;
+
+        void main()
+        {
+            gl_Position =
+                vec4(
+                    position,
+                    0.0,
                     1.0
                 );
         }
     )";
 
 
-    // --------------------------------------------------------
-    // Compile selection vertex shader
-    // --------------------------------------------------------
+    const char* selectionFragmentShader = R"(
+        #version 330 core
 
-    GLuint selectionVertexShader =
-        glCreateShader(
-            GL_VERTEX_SHADER
-        );
+        out vec4 FragColor;
 
-    glShaderSource(
-        selectionVertexShader,
-        1,
-        &selectionVertexShaderSource,
-        nullptr
-    );
+        void main()
+        {
+            FragColor =
+                vec4(
+                    0.2,
+                    0.5,
+                    1.0,
+                    0.25
+                );
+        }
+    )";
 
-    glCompileShader(
-        selectionVertexShader
-    );
-
-
-    // --------------------------------------------------------
-    // Compile selection fragment shader
-    // --------------------------------------------------------
-
-    GLuint selectionFragmentShader =
-        glCreateShader(
-            GL_FRAGMENT_SHADER
-        );
-
-    glShaderSource(
-        selectionFragmentShader,
-        1,
-        &selectionFragmentShaderSource,
-        nullptr
-    );
-
-    glCompileShader(
-        selectionFragmentShader
-    );
-
-
-    // --------------------------------------------------------
-    // Create selection shader program
-    // --------------------------------------------------------
 
     selectionShader =
-        glCreateProgram();
+        createProgram(
+            selectionVertexShader,
+            selectionFragmentShader
+        );
 
-    glAttachShader(
-        selectionShader,
-        selectionVertexShader
-    );
-
-    glAttachShader(
-        selectionShader,
-        selectionFragmentShader
-    );
-
-    glLinkProgram(
-        selectionShader
-    );
-
-
-    glDeleteShader(
-        selectionVertexShader
-    );
-
-    glDeleteShader(
-        selectionFragmentShader
-    );
-
-
-    // --------------------------------------------------------
-    // Create selection VAO and VBO
-    // --------------------------------------------------------
 
     glGenVertexArrays(
         1,
@@ -293,47 +338,6 @@ void WaveformRenderer::initialize()
         1,
         &selectionVBO
     );
-
-
-    glBindVertexArray(
-        selectionVAO
-    );
-
-    glBindBuffer(
-        GL_ARRAY_BUFFER,
-        selectionVBO
-    );
-
-
-    // Space for 4 vertices:
-    //
-    // start bottom
-    // start top
-    // end bottom
-    // end top
-    //
-
-    glBufferData(
-        GL_ARRAY_BUFFER,
-        8 * sizeof(float),
-        nullptr,
-        GL_DYNAMIC_DRAW
-    );
-
-
-    glVertexAttribPointer(
-        0,
-        2,
-        GL_FLOAT,
-        GL_FALSE,
-        2 * sizeof(float),
-        nullptr
-    );
-
-    glEnableVertexAttribArray(0);
-
-
-    glBindVertexArray(0);
 }
 
 
@@ -342,26 +346,25 @@ void WaveformRenderer::initialize()
 // ============================================================
 
 void WaveformRenderer::uploadSamples(
-    const std::vector<float>& samples
+    const std::vector<float>& newSamples
 )
 {
+    samples = newSamples;
+
     sampleCount =
         static_cast<int>(
             samples.size()
         );
 
-
     if (sampleCount == 0)
-    {
         return;
-    }
 
 
+    // Upload waveform
     glBindBuffer(
         GL_ARRAY_BUFFER,
         VBO
     );
-
 
     glBufferData(
         GL_ARRAY_BUFFER,
@@ -371,215 +374,163 @@ void WaveformRenderer::uploadSamples(
     );
 
 
-    glBindBuffer(
-        GL_ARRAY_BUFFER,
-        0
-    );
+    // --------------------------------------------------------
+    // Build coarse waveform features.
+    //
+    // These make searching a large audio file much faster.
+    // --------------------------------------------------------
+
+    int blockCount =
+        (
+            sampleCount +
+            FEATURE_BLOCK_SIZE -
+            1
+        )
+        /
+        FEATURE_BLOCK_SIZE;
 
 
-    // Start by showing the whole audio file.
+    featureMin.resize(blockCount);
+    featureMax.resize(blockCount);
+    featureAvg.resize(blockCount);
+
+
+    for (int block = 0;
+         block < blockCount;
+         block++)
+    {
+        int start =
+            block *
+            FEATURE_BLOCK_SIZE;
+
+        int end =
+            std::min(
+                start +
+                FEATURE_BLOCK_SIZE,
+                sampleCount
+            );
+
+
+        float minValue =
+            samples[start];
+
+        float maxValue =
+            samples[start];
+
+        float sum = 0.0f;
+
+
+        for (int i = start;
+             i < end;
+             i++)
+        {
+            minValue =
+                std::min(
+                    minValue,
+                    samples[i]
+                );
+
+            maxValue =
+                std::max(
+                    maxValue,
+                    samples[i]
+                );
+
+            sum += samples[i];
+        }
+
+
+        featureMin[block] =
+            minValue;
+
+        featureMax[block] =
+            maxValue;
+
+        featureAvg[block] =
+            sum /
+            static_cast<float>(
+                end - start
+            );
+    }
+
+
+    // Reset view
 
     viewStart = 0.0f;
 
     viewSize =
-        static_cast<float>(
-            sampleCount
+        std::min(
+            10000.0f,
+            static_cast<float>(
+                sampleCount
+            )
         );
+
+
+    // New audio means new scans.
+
+    scans.clear();
+
+    hasTemporarySelection = false;
 }
 
 
 // ============================================================
-// Draw
+// Window size
 // ============================================================
 
-void WaveformRenderer::draw()
+void WaveformRenderer::setWindowWidth(
+    int width
+)
 {
-    if (sampleCount < 2)
-    {
-        return;
-    }
+    if (width > 0)
+        windowWidth = width;
+}
 
 
-    // ========================================================
-    // Draw waveform
-    // ========================================================
+// ============================================================
+// Screen X -> sample
+// ============================================================
 
-    glUseProgram(
-        shaderProgram
-    );
+int WaveformRenderer::screenToSample(
+    float mouseX
+) const
+{
+    if (sampleCount <= 0)
+        return 0;
 
 
-    // --------------------------------------------------------
-    // Send view information to shader
-    // --------------------------------------------------------
+    float normalized =
+        (mouseX + 1.0f)
+        /
+        2.0f;
 
-    GLint startLocation =
-        glGetUniformLocation(
-            shaderProgram,
-            "viewStart"
+
+    normalized =
+        std::clamp(
+            normalized,
+            0.0f,
+            1.0f
         );
 
 
-    GLint sizeLocation =
-        glGetUniformLocation(
-            shaderProgram,
-            "viewSize"
-        );
+    float sample =
+        viewStart +
+        normalized *
+        viewSize;
 
 
-    GLint countLocation =
-        glGetUniformLocation(
-            shaderProgram,
-            "sampleCount"
-        );
-
-
-    glUniform1f(
-        startLocation,
-        viewStart
-    );
-
-
-    glUniform1f(
-        sizeLocation,
-        viewSize
-    );
-
-
-    glUniform1f(
-        countLocation,
-        static_cast<float>(
-            sampleCount
-        )
-    );
-
-
-    // --------------------------------------------------------
-    // Bind waveform
-    // --------------------------------------------------------
-
-    glBindVertexArray(
-        VAO
-    );
-
-
-    int samplesToDraw =
+    int result =
         static_cast<int>(
-            std::min(
-                viewSize,
-                static_cast<float>(
-                    sampleCount
-                )
-            )
+            std::round(sample)
         );
 
 
-    // --------------------------------------------------------
-    // Draw waveform
-    // --------------------------------------------------------
-
-    glDrawArrays(
-        GL_LINE_STRIP,
-        static_cast<GLint>(
-            viewStart
-        ),
-        samplesToDraw
+    return std::clamp(
+        result,
+        0,
+        sampleCount - 1
     );
-
-
-    glBindVertexArray(0);
-
-
-    // ========================================================
-    // Draw selection lines
-    // ========================================================
-
-    if (hasSelection)
-    {
-        // Convert sample positions into
-        // OpenGL coordinates.
-
-        float startX =
-            -1.0f +
-            2.0f *
-            (
-                selectionStart -
-                viewStart
-            )
-            / viewSize;
-
-
-        float endX =
-            -1.0f +
-            2.0f *
-            (
-                selectionEnd -
-                viewStart
-            )
-            / viewSize;
-
-
-        float linePositions[] =
-        {
-            // Start line
-            startX, -1.0f,
-            startX,  1.0f,
-
-            // End line
-            endX, -1.0f,
-            endX,  1.0f
-        };
-
-
-        // ----------------------------------------------------
-        // Upload line positions
-        // ----------------------------------------------------
-
-        glBindBuffer(
-            GL_ARRAY_BUFFER,
-            selectionVBO
-        );
-
-
-        glBufferSubData(
-            GL_ARRAY_BUFFER,
-            0,
-            sizeof(linePositions),
-            linePositions
-        );
-
-
-        // ----------------------------------------------------
-        // Draw selection
-        // ----------------------------------------------------
-
-        glUseProgram(
-            selectionShader
-        );
-
-
-        glBindVertexArray(
-            selectionVAO
-        );
-
-
-        glLineWidth(2.0f);
-
-
-        glDrawArrays(
-            GL_LINES,
-            0,
-            4
-        );
-
-
-        glBindVertexArray(0);
-
-        glBindBuffer(
-            GL_ARRAY_BUFFER,
-            0
-        );
-    }
 }
 
 
@@ -593,33 +544,27 @@ void WaveformRenderer::zoom(
 )
 {
     if (sampleCount <= 0)
-    {
         return;
-    }
 
-
-    // Convert mouse position from
-    // OpenGL coordinates into a position
-    // within the current view.
 
     float mousePosition =
         viewStart +
         (
             (mouseX + 1.0f)
-            / 2.0f
+            /
+            2.0f
         )
-        * viewSize;
+        *
+        viewSize;
 
-
-    // Change zoom level.
 
     viewSize *= amount;
 
 
-    // Don't zoom farther out than
-    // the entire audio file.
-
-    if (viewSize > sampleCount)
+    if (viewSize >
+        static_cast<float>(
+            sampleCount
+        ))
     {
         viewSize =
             static_cast<float>(
@@ -628,51 +573,42 @@ void WaveformRenderer::zoom(
     }
 
 
-    // Don't zoom farther in than
-    // two samples.
-
     if (viewSize < 2.0f)
-    {
         viewSize = 2.0f;
-    }
 
-
-    // Keep the mouse position
-    // underneath the cursor.
 
     float mouseRatio =
-        (
-            mouseX + 1.0f
-        )
-        / 2.0f;
+        (mouseX + 1.0f)
+        /
+        2.0f;
 
 
     viewStart =
         mousePosition -
-        mouseRatio * viewSize;
+        mouseRatio *
+        viewSize;
 
-
-    // Keep view inside audio.
 
     if (viewStart < 0.0f)
-    {
         viewStart = 0.0f;
-    }
 
 
     if (viewStart + viewSize >
-        sampleCount)
+        static_cast<float>(
+            sampleCount
+        ))
     {
         viewStart =
-            sampleCount -
+            static_cast<float>(
+                sampleCount
+            )
+            -
             viewSize;
     }
 
 
     if (viewStart < 0.0f)
-    {
         viewStart = 0.0f;
-    }
 }
 
 
@@ -688,30 +624,25 @@ void WaveformRenderer::pan(
 
 
     if (viewStart < 0.0f)
-    {
         viewStart = 0.0f;
-    }
 
 
     if (viewStart + viewSize >
-        sampleCount)
+        static_cast<float>(
+            sampleCount
+        ))
     {
         viewStart =
-            sampleCount -
+            static_cast<float>(
+                sampleCount
+            )
+            -
             viewSize;
     }
-}
 
 
-// ============================================================
-// Window width
-// ============================================================
-
-void WaveformRenderer::setWindowWidth(
-    int width
-)
-{
-    windowWidth = width;
+    if (viewStart < 0.0f)
+        viewStart = 0.0f;
 }
 
 
@@ -719,51 +650,17 @@ void WaveformRenderer::setWindowWidth(
 // Start selection
 // ============================================================
 
-void WaveformRenderer::startSelection(
-    float mouseX
-)
+void WaveformRenderer::startSelection(float mouseX)
 {
-    if (sampleCount <= 0)
-    {
-        return;
-    }
+    int sample = screenToSample(mouseX);
 
+    temporarySelectionStart = sample;
+    temporarySelectionEnd = sample;
 
-    float normalizedPosition =
-        (mouseX + 1.0f) / 2.0f;
-
-
-    selectionStart =
-        viewStart +
-        normalizedPosition *
-        viewSize;
-
-
-    selectionEnd =
-        selectionStart;
-
-
-    // Keep inside audio.
-
-    if (selectionStart < 0.0f)
-    {
-        selectionStart = 0.0f;
-    }
-
-
-    if (selectionStart >
-        sampleCount)
-    {
-        selectionStart =
-            static_cast<float>(
-                sampleCount
-            );
-    }
-
+    currentSelectionSample = sample;
 
     selecting = true;
-
-    hasSelection = true;
+    hasTemporarySelection = true;
 }
 
 
@@ -771,42 +668,18 @@ void WaveformRenderer::startSelection(
 // Update selection
 // ============================================================
 
-void WaveformRenderer::updateSelection(
-    float mouseX
-)
+void WaveformRenderer::updateSelection(float mouseX)
 {
     if (!selecting)
-    {
         return;
-    }
 
+    int sample = screenToSample(mouseX);
 
-    float normalizedPosition =
-        (mouseX + 1.0f) / 2.0f;
+    currentSelectionSample = sample;
 
-
-    selectionEnd =
-        viewStart +
-        normalizedPosition *
-        viewSize;
-
-
-    // Keep inside audio.
-
-    if (selectionEnd < 0.0f)
-    {
-        selectionEnd = 0.0f;
-    }
-
-
-    if (selectionEnd >
-        sampleCount)
-    {
-        selectionEnd =
-            static_cast<float>(
-                sampleCount
-            );
-    }
+    // The start stays where it is.
+    // The cursor controls the end.
+    temporarySelectionEnd = sample;
 }
 
 
@@ -814,52 +687,1288 @@ void WaveformRenderer::updateSelection(
 // Finish selection
 // ============================================================
 
-void WaveformRenderer::finishSelection(
-    float mouseX
-)
+void WaveformRenderer::finishSelection(float mouseX)
 {
     if (!selecting)
+        return;
+
+    int sample = screenToSample(mouseX);
+
+    // The end is wherever the cursor was released.
+    temporarySelectionEnd = sample;
+
+    // Snap the END based on its current position.
+    temporarySelectionEnd =
+        findNearestPeakOrTrough(
+            temporarySelectionEnd
+        );
+
+    int start = std::min(
+        temporarySelectionStart,
+        temporarySelectionEnd
+    );
+
+    int end = std::max(
+        temporarySelectionStart,
+        temporarySelectionEnd
+    );
+
+    if (end - start < 2)
     {
+        selecting = false;
+        hasTemporarySelection = false;
         return;
     }
 
+    Scan newScan;
 
-    updateSelection(mouseX);
+    newScan.selectionStart = start;
+    newScan.selectionEnd = end;
 
+    scanSelection(newScan);
+
+    scans.push_back(newScan);
 
     selecting = false;
+    hasTemporarySelection = false;
+}
 
 
-    // Make sure start is smaller
-    // than end.
+// ============================================================
+// Scan selection
+// ============================================================
 
-    if (selectionStart >
-        selectionEnd)
+void WaveformRenderer::scanSelection(
+    Scan& scan
+)
+{
+    constexpr float SIMILARITY_THRESHOLD = 95.0f;
+    constexpr float LENGTH_VARIATION = 10.0f;
+
+
+    int patternStart =
+        scan.selectionStart;
+
+    int patternEnd =
+        scan.selectionEnd;
+
+
+    int patternLength =
+        patternEnd -
+        patternStart;
+
+
+    if (patternLength < 32)
+        return;
+
+
+    // --------------------------------------------------------
+    // Number of points used to describe the shape.
+    // --------------------------------------------------------
+
+    int shapePoints =
+        patternLength /
+        16;
+
+
+    shapePoints =
+        std::clamp(
+            shapePoints,
+            8,
+            64
+        );
+
+
+    // --------------------------------------------------------
+    // Fingerprint structure.
+    //
+    // min/max/avg are normalized for SHAPE comparison.
+    // --------------------------------------------------------
+
+    struct ShapePoint
     {
-        std::swap(
-            selectionStart,
-            selectionEnd
+        float minValue;
+        float maxValue;
+        float avgValue;
+    };
+
+
+    struct Fingerprint
+    {
+        std::vector<ShapePoint> points;
+    };
+
+
+    // --------------------------------------------------------
+    // Create fingerprint.
+    // --------------------------------------------------------
+
+    auto makeFingerprint =
+        [&](int start, int length)
+        -> Fingerprint
+    {
+        Fingerprint result;
+
+        result.points.resize(
+            shapePoints
+        );
+
+
+        float rawMean = 0.0f;
+
+
+        // First gather raw data.
+
+        for (int i = 0;
+             i < shapePoints;
+             i++)
+        {
+            float ratio =
+                static_cast<float>(i)
+                /
+                static_cast<float>(
+                    shapePoints - 1
+                );
+
+
+            int samplePosition =
+                start +
+                static_cast<int>(
+                    ratio *
+                    static_cast<float>(
+                        length - 1
+                    )
+                );
+
+
+            int block =
+                samplePosition /
+                FEATURE_BLOCK_SIZE;
+
+
+            block =
+                std::clamp(
+                    block,
+                    0,
+                    static_cast<int>(
+                        featureMin.size()
+                    ) - 1
+                );
+
+
+            result.points[i].minValue =
+                featureMin[block];
+
+            result.points[i].maxValue =
+                featureMax[block];
+
+            result.points[i].avgValue =
+                featureAvg[block];
+
+
+            rawMean +=
+                result.points[i].avgValue;
+        }
+
+
+        rawMean /=
+            static_cast<float>(
+                shapePoints
+            );
+
+
+        // ----------------------------------------------------
+        // Remove DC offset.
+        // ----------------------------------------------------
+
+        float maxAmplitude = 0.0f;
+
+
+        for (auto& point :
+             result.points)
+        {
+            point.minValue -=
+                rawMean;
+
+            point.maxValue -=
+                rawMean;
+
+            point.avgValue -=
+                rawMean;
+
+
+            maxAmplitude =
+                std::max(
+                    maxAmplitude,
+                    std::abs(
+                        point.minValue
+                    )
+                );
+
+
+            maxAmplitude =
+                std::max(
+                    maxAmplitude,
+                    std::abs(
+                        point.maxValue
+                    )
+                );
+        }
+
+
+        // ----------------------------------------------------
+        // Normalize amplitude.
+        //
+        // This is what lets shape matching tolerate
+        // different volume levels.
+        // ----------------------------------------------------
+
+        if (maxAmplitude > 0.000001f)
+        {
+            for (auto& point :
+                 result.points)
+            {
+                point.minValue /=
+                    maxAmplitude;
+
+                point.maxValue /=
+                    maxAmplitude;
+
+                point.avgValue /=
+                    maxAmplitude;
+            }
+        }
+
+
+        return result;
+    };
+
+
+    // --------------------------------------------------------
+    // Similarity calculation.
+    // --------------------------------------------------------
+
+    auto calculateSimilarity =
+        [&](const Fingerprint& a,
+            const Fingerprint& b)
+        -> float
+    {
+        if (a.points.size() !=
+            b.points.size())
+        {
+            return 0.0f;
+        }
+
+
+        float totalError = 0.0f;
+
+
+        for (size_t i = 0;
+             i < a.points.size();
+             i++)
+        {
+            float minError =
+                std::abs(
+                    a.points[i].minValue -
+                    b.points[i].minValue
+                );
+
+
+            float maxError =
+                std::abs(
+                    a.points[i].maxValue -
+                    b.points[i].maxValue
+                );
+
+
+            float avgError =
+                std::abs(
+                    a.points[i].avgValue -
+                    b.points[i].avgValue
+                );
+
+
+            float pointError =
+                minError * 0.35f +
+                maxError * 0.35f +
+                avgError * 0.30f;
+
+
+            totalError +=
+                pointError;
+        }
+
+
+        float averageError =
+            totalError /
+            static_cast<float>(
+                a.points.size()
+            );
+
+
+        float similarity =
+            1.0f -
+            averageError /
+            2.0f;
+
+
+        similarity =
+            std::clamp(
+                similarity,
+                0.0f,
+                1.0f
+            );
+
+
+        return similarity * 100.0f;
+    };
+
+
+    Fingerprint pattern =
+        makeFingerprint(
+            patternStart,
+            patternLength
+        );
+
+
+    // --------------------------------------------------------
+    // Candidate length range.
+    // --------------------------------------------------------
+
+    float variation =
+        LENGTH_VARIATION /
+        100.0f;
+
+
+    int minimumLength =
+        static_cast<int>(
+            patternLength *
+            (1.0f - variation)
+        );
+
+
+    int maximumLength =
+        static_cast<int>(
+            patternLength *
+            (1.0f + variation)
+        );
+
+
+    minimumLength =
+        std::max(
+            minimumLength,
+            32
+        );
+
+
+    maximumLength =
+        std::min(
+            maximumLength,
+            sampleCount
+        );
+
+
+    // --------------------------------------------------------
+    // Try 5 different candidate lengths.
+    // --------------------------------------------------------
+
+    std::vector<int> candidateLengths;
+
+
+    for (int i = 0;
+         i < 5;
+         i++)
+    {
+        float ratio =
+            static_cast<float>(i)
+            /
+            4.0f;
+
+
+        float length =
+            static_cast<float>(
+                minimumLength
+            )
+            +
+            ratio *
+            (
+                static_cast<float>(
+                    maximumLength
+                )
+                -
+                static_cast<float>(
+                    minimumLength
+                )
+            );
+
+
+        candidateLengths.push_back(
+            static_cast<int>(
+                length
+            )
         );
     }
 
 
-    std::cout
-        << "Selection: samples "
-        << static_cast<int>(
-            selectionStart
-        )
-        << " to "
-        << static_cast<int>(
-            selectionEnd
-        )
-        << "\n";
+    // --------------------------------------------------------
+    // Search through waveform.
+    // --------------------------------------------------------
+
+    int searchStep =
+        std::max(
+            1,
+            patternLength / 100
+        );
 
 
-    std::cout
-        << "Selected "
-        << static_cast<int>(
-            selectionEnd -
-            selectionStart
+    for (int candidateStart = 0;
+         candidateStart <
+         sampleCount - minimumLength;
+         candidateStart += searchStep)
+    {
+        // Don't match the selected region itself.
+
+        if (
+            candidateStart <
+                patternEnd
+            &&
+            candidateStart +
+                maximumLength >
+                patternStart
         )
-        << " samples.\n";
+        {
+            continue;
+        }
+
+
+        float bestSimilarity = 0.0f;
+
+        int bestEnd = 0;
+
+
+        for (int candidateLength :
+             candidateLengths)
+        {
+            if (
+                candidateStart +
+                candidateLength >=
+                sampleCount
+            )
+            {
+                continue;
+            }
+
+
+            Fingerprint candidate =
+                makeFingerprint(
+                    candidateStart,
+                    candidateLength
+                );
+
+
+            float similarity =
+                calculateSimilarity(
+                    pattern,
+                    candidate
+                );
+
+
+            if (similarity >
+                bestSimilarity)
+            {
+                bestSimilarity =
+                    similarity;
+
+                bestEnd =
+                    candidateStart +
+                    candidateLength;
+            }
+        }
+
+
+        if (bestSimilarity >=
+            SIMILARITY_THRESHOLD)
+        {
+            Match match;
+
+            match.start =
+                candidateStart;
+
+            match.end =
+                bestEnd;
+
+            match.similarity =
+                bestSimilarity;
+
+
+            scan.matches.push_back(
+                match
+            );
+        }
+    }
+
+
+    // --------------------------------------------------------
+    // Sort best matches first.
+    // --------------------------------------------------------
+
+    std::sort(
+        scan.matches.begin(),
+        scan.matches.end(),
+        [](const Match& a,
+           const Match& b)
+        {
+            return
+                a.similarity >
+                b.similarity;
+        }
+    );
+
+
+    // --------------------------------------------------------
+    // Remove overlapping matches.
+    //
+    // A single area shouldn't produce 10 nearly identical
+    // matches just because the search step moved slightly.
+    // --------------------------------------------------------
+
+    removeOverlappingMatches(
+        scan.matches
+    );
+
+
+    // Put matches back into timeline order.
+
+    std::sort(
+        scan.matches.begin(),
+        scan.matches.end(),
+        [](const Match& a,
+           const Match& b)
+        {
+            return a.start < b.start;
+        }
+    );
+
+
+    // --------------------------------------------------------
+    // Print results.
+    // --------------------------------------------------------
+
+    for (const Match& match :
+         scan.matches)
+    {
+        std::cout
+            << match.similarity
+            << "%   samples "
+            << match.start
+            << " -> "
+            << match.end
+            << "   length "
+            << match.end -
+               match.start
+            << std::endl;
+    }
+}
+
+
+// ============================================================
+// Remove overlapping matches
+// ============================================================
+
+void WaveformRenderer::removeOverlappingMatches(
+    std::vector<Match>& matches
+)
+{
+    if (matches.empty())
+        return;
+
+
+    std::vector<Match> result;
+
+
+    // Matches are currently sorted by similarity.
+
+    for (const Match& candidate :
+         matches)
+    {
+        bool overlaps = false;
+
+
+        for (const Match& existing :
+             result)
+        {
+            if (
+                candidate.start <
+                    existing.end
+                &&
+                candidate.end >
+                    existing.start
+            )
+            {
+                overlaps = true;
+                break;
+            }
+        }
+
+
+        if (!overlaps)
+        {
+            result.push_back(
+                candidate
+            );
+        }
+    }
+
+
+    matches =
+        std::move(result);
+}
+
+
+// ============================================================
+// Delete something at right-click position
+// ============================================================
+
+bool WaveformRenderer::deleteAtPosition(
+    float mouseX
+)
+{
+    int sample =
+        screenToSample(mouseX);
+
+
+    // --------------------------------------------------------
+    // First look for a MATCH.
+    //
+    // Matches get priority because the original selection
+    // itself does not overlap its own matches.
+    // --------------------------------------------------------
+
+    for (size_t scanIndex = 0;
+         scanIndex < scans.size();
+         scanIndex++)
+    {
+        Scan& scan =
+            scans[scanIndex];
+
+
+        for (size_t matchIndex = 0;
+             matchIndex <
+             scan.matches.size();
+             matchIndex++)
+        {
+            const Match& match =
+                scan.matches[matchIndex];
+
+
+            if (
+                sample >= match.start
+                &&
+                sample <= match.end
+            )
+            {
+                std::cout
+                    << "Deleted match: "
+                    << match.start
+                    << " -> "
+                    << match.end
+                    << std::endl;
+
+
+                scan.matches.erase(
+                    scan.matches.begin()
+                    +
+                    matchIndex
+                );
+
+
+                return true;
+            }
+        }
+    }
+
+
+    // --------------------------------------------------------
+    // Now check original scan selections.
+    // --------------------------------------------------------
+
+    for (size_t i = 0;
+         i < scans.size();
+         i++)
+    {
+        const Scan& scan =
+            scans[i];
+
+
+        if (
+            sample >=
+                scan.selectionStart
+            &&
+            sample <=
+                scan.selectionEnd
+        )
+        {
+            std::cout
+                << "Deleted scan: "
+                << scan.selectionStart
+                << " -> "
+                << scan.selectionEnd
+                << std::endl;
+
+
+            scans.erase(
+                scans.begin() + i
+            );
+
+
+            return true;
+        }
+    }
+
+
+    return false;
+}
+
+
+// ============================================================
+// Draw
+// ============================================================
+
+void WaveformRenderer::draw()
+{
+    if (sampleCount <= 0)
+        return;
+
+
+    // ========================================================
+    // Draw match highlights
+    // ========================================================
+
+    glUseProgram(
+        highlightShader
+    );
+
+
+    glEnable(
+        GL_BLEND
+    );
+
+    glBlendFunc(
+        GL_SRC_ALPHA,
+        GL_ONE_MINUS_SRC_ALPHA
+    );
+
+
+    for (const Scan& scan :
+         scans)
+    {
+        for (const Match& match :
+             scan.matches)
+        {
+            float startX =
+                -1.0f +
+                2.0f *
+                (
+                    static_cast<float>(
+                        match.start
+                    )
+                    -
+                    viewStart
+                )
+                /
+                viewSize;
+
+
+            float endX =
+                -1.0f +
+                2.0f *
+                (
+                    static_cast<float>(
+                        match.end
+                    )
+                    -
+                    viewStart
+                )
+                /
+                viewSize;
+
+
+            // Don't bother drawing if completely
+            // outside the current view.
+
+            if (endX < -1.0f ||
+                startX > 1.0f)
+            {
+                continue;
+            }
+
+
+            startX =
+                std::max(
+                    startX,
+                    -1.0f
+                );
+
+            endX =
+                std::min(
+                    endX,
+                    1.0f
+                );
+
+
+            float vertices[] =
+            {
+                startX, -1.0f,
+                endX,   -1.0f,
+                endX,    1.0f,
+
+                startX, -1.0f,
+                endX,    1.0f,
+                startX,  1.0f
+            };
+
+
+            glBindVertexArray(
+                highlightVAO
+            );
+
+            glBindBuffer(
+                GL_ARRAY_BUFFER,
+                highlightVBO
+            );
+
+            glBufferData(
+                GL_ARRAY_BUFFER,
+                sizeof(vertices),
+                vertices,
+                GL_DYNAMIC_DRAW
+            );
+
+
+            glVertexAttribPointer(
+                0,
+                2,
+                GL_FLOAT,
+                GL_FALSE,
+                2 * sizeof(float),
+                nullptr
+            );
+
+            glEnableVertexAttribArray(0);
+
+
+            glDrawArrays(
+                GL_TRIANGLES,
+                0,
+                6
+            );
+        }
+    }
+
+
+    // ========================================================
+    // Draw original selections
+    // ========================================================
+
+    glUseProgram(
+        selectionShader
+    );
+
+
+    for (const Scan& scan :
+         scans)
+    {
+        float startX =
+            -1.0f +
+            2.0f *
+            (
+                static_cast<float>(
+                    scan.selectionStart
+                )
+                -
+                viewStart
+            )
+            /
+            viewSize;
+
+
+        float endX =
+            -1.0f +
+            2.0f *
+            (
+                static_cast<float>(
+                    scan.selectionEnd
+                )
+                -
+                viewStart
+            )
+            /
+            viewSize;
+
+
+        if (endX < -1.0f ||
+            startX > 1.0f)
+        {
+            continue;
+        }
+
+
+        startX =
+            std::max(
+                startX,
+                -1.0f
+            );
+
+        endX =
+            std::min(
+                endX,
+                1.0f
+            );
+
+
+        float vertices[] =
+        {
+            startX, -1.0f,
+            endX,   -1.0f,
+            endX,    1.0f,
+
+            startX, -1.0f,
+            endX,    1.0f,
+            startX,  1.0f
+        };
+
+
+        glBindVertexArray(
+            selectionVAO
+        );
+
+        glBindBuffer(
+            GL_ARRAY_BUFFER,
+            selectionVBO
+        );
+
+        glBufferData(
+            GL_ARRAY_BUFFER,
+            sizeof(vertices),
+            vertices,
+            GL_DYNAMIC_DRAW
+        );
+
+
+        glVertexAttribPointer(
+            0,
+            2,
+            GL_FLOAT,
+            GL_FALSE,
+            2 * sizeof(float),
+            nullptr
+        );
+
+        glEnableVertexAttribArray(0);
+
+
+        glDrawArrays(
+            GL_TRIANGLES,
+            0,
+            6
+        );
+
+
+        // ----------------------------------------------------
+        // Draw selection boundaries as vertical lines.
+        // ----------------------------------------------------
+
+        float lines[] =
+        {
+            startX, -1.0f,
+            startX,  1.0f,
+
+            endX, -1.0f,
+            endX,  1.0f
+        };
+
+
+        glBindVertexArray(
+            selectionVAO
+        );
+
+        glBindBuffer(
+            GL_ARRAY_BUFFER,
+            selectionVBO
+        );
+
+        glBufferData(
+            GL_ARRAY_BUFFER,
+            sizeof(lines),
+            lines,
+            GL_DYNAMIC_DRAW
+        );
+
+
+        glVertexAttribPointer(
+            0,
+            2,
+            GL_FLOAT,
+            GL_FALSE,
+            2 * sizeof(float),
+            nullptr
+        );
+
+        glEnableVertexAttribArray(0);
+
+
+        glDrawArrays(
+            GL_LINES,
+            0,
+            4
+        );
+    }
+
+
+    // ========================================================
+    // Draw temporary selection while dragging
+    // ========================================================
+
+    if (selecting &&
+        hasTemporarySelection)
+    {
+        float startX =
+            -1.0f +
+            2.0f *
+            (
+                static_cast<float>(
+                    temporarySelectionStart
+                )
+                -
+                viewStart
+            )
+            /
+            viewSize;
+
+
+        float endX =
+            -1.0f +
+            2.0f *
+            (
+                static_cast<float>(
+                    temporarySelectionEnd
+                )
+                -
+                viewStart
+            )
+            /
+            viewSize;
+
+
+        if (startX > endX)
+            std::swap(
+                startX,
+                endX
+            );
+
+
+        startX =
+            std::max(
+                startX,
+                -1.0f
+            );
+
+        endX =
+            std::min(
+                endX,
+                1.0f
+            );
+
+
+        float vertices[] =
+        {
+            startX, -1.0f,
+            endX,   -1.0f,
+            endX,    1.0f,
+
+            startX, -1.0f,
+            endX,    1.0f,
+            startX,  1.0f
+        };
+
+
+        glBindVertexArray(
+            selectionVAO
+        );
+
+        glBindBuffer(
+            GL_ARRAY_BUFFER,
+            selectionVBO
+        );
+
+        glBufferData(
+            GL_ARRAY_BUFFER,
+            sizeof(vertices),
+            vertices,
+            GL_DYNAMIC_DRAW
+        );
+
+
+        glVertexAttribPointer(
+            0,
+            2,
+            GL_FLOAT,
+            GL_FALSE,
+            2 * sizeof(float),
+            nullptr
+        );
+
+        glEnableVertexAttribArray(0);
+
+
+        glDrawArrays(
+            GL_TRIANGLES,
+            0,
+            6
+        );
+    }
+
+
+    // ========================================================
+    // Draw waveform
+    // ========================================================
+
+    glDisable(
+        GL_BLEND
+    );
+
+
+    glUseProgram(
+        shaderProgram
+    );
+
+
+    glUniform1f(
+        glGetUniformLocation(
+            shaderProgram,
+            "viewStart"
+        ),
+        viewStart
+    );
+
+
+    glUniform1f(
+        glGetUniformLocation(
+            shaderProgram,
+            "viewSize"
+        ),
+        viewSize
+    );
+
+
+    glBindVertexArray(
+        VAO
+    );
+
+
+    int firstSample =
+        static_cast<int>(
+            viewStart
+        );
+
+
+    int samplesToDraw =
+        static_cast<int>(
+            viewSize
+        )
+        +
+        2;
+
+
+    samplesToDraw =
+        std::min(
+            samplesToDraw,
+            sampleCount -
+            firstSample
+        );
+
+
+    if (samplesToDraw > 1)
+    {
+        glDrawArrays(
+            GL_LINE_STRIP,
+            firstSample,
+            samplesToDraw
+        );
+    }
+
+
+    glBindVertexArray(0);
+}
+
+int WaveformRenderer::findNearestPeakOrTrough(int sample) const
+{
+    if (samples.size() < 3)
+        return sample;
+
+    sample = std::max(
+        1,
+        std::min(
+            sample,
+            static_cast<int>(samples.size()) - 2
+        )
+    );
+
+    const int searchRadius = 500;
+
+    int searchStart =
+        std::max(1, sample - searchRadius);
+
+    int searchEnd =
+        std::min(
+            static_cast<int>(samples.size()) - 2,
+            sample + searchRadius
+        );
+
+    int bestIndex = sample;
+    int bestDistance = searchRadius + 1;
+
+    for (int i = searchStart; i <= searchEnd; ++i)
+    {
+        float previous = samples[i - 1];
+        float current = samples[i];
+        float next = samples[i + 1];
+
+        bool isMaximum =
+            current >= previous &&
+            current >= next;
+
+        bool isMinimum =
+            current <= previous &&
+            current <= next;
+
+        if (isMaximum || isMinimum)
+        {
+            int distance = std::abs(i - sample);
+
+            if (distance < bestDistance)
+            {
+                bestDistance = distance;
+                bestIndex = i;
+            }
+        }
+    }
+
+    return bestIndex;
+}
+
+void WaveformRenderer::snapSelectionEndpoint()
+{
+    if (!selecting)
+        return;
+
+    // Snap the START point based on where the START
+    // point currently is, not where the cursor is.
+    temporarySelectionStart =
+        findNearestPeakOrTrough(
+            temporarySelectionStart
+        );
+
+    // Keep the cursor position unchanged so dragging
+    // continues normally.
 }

@@ -11,31 +11,39 @@
 #include "WaveformRenderer.h"
 
 
-// ============================================================
-// WAV FILE SELECTOR
-// ============================================================
+// ------------------------------------------------------------
+// Global objects
+// ------------------------------------------------------------
+WaveformRenderer waveform;
+WavFile audio;
 
-std::string openWavFile()
+
+// ------------------------------------------------------------
+// Windows file picker
+// ------------------------------------------------------------
+std::string openFileDialog()
 {
-    OPENFILENAMEA ofn{};
+    char fileName[MAX_PATH] = { 0 };
 
-    char fileName[MAX_PATH] = "";
+    OPENFILENAMEA dialog = {};
 
-    ofn.lStructSize = sizeof(ofn);
-    ofn.lpstrFile = fileName;
-    ofn.nMaxFile = MAX_PATH;
+    dialog.lStructSize = sizeof(dialog);
+    dialog.hwndOwner = nullptr;
 
-    ofn.lpstrFilter =
-        "WAV Audio (*.wav)\0*.wav\0"
-        "All Files (*.*)\0*.*\0";
+    dialog.lpstrFilter =
+        "WAV Files\0*.wav\0"
+        "All Files\0*.*\0";
 
-    ofn.nFilterIndex = 1;
+    dialog.lpstrFile = fileName;
+    dialog.nMaxFile = MAX_PATH;
 
-    ofn.Flags =
+    dialog.Flags =
         OFN_PATHMUSTEXIST |
         OFN_FILEMUSTEXIST;
 
-    if (GetOpenFileNameA(&ofn))
+    dialog.lpstrTitle = "Open WAV File";
+
+    if (GetOpenFileNameA(&dialog))
     {
         return std::string(fileName);
     }
@@ -44,30 +52,39 @@ std::string openWavFile()
 }
 
 
-// ============================================================
-// WAVEFORM POINTER
-// ============================================================
+// ------------------------------------------------------------
+// Convert mouse X position to OpenGL -1 to +1
+// ------------------------------------------------------------
+float getNormalizedMouseX(
+    GLFWwindow* window,
+    double mouseX)
+{
+    int width;
+    int height;
 
-WaveformRenderer* waveformPtr = nullptr;
+    glfwGetWindowSize(
+        window,
+        &width,
+        &height
+    );
+
+    if (width <= 0)
+        return 0.0f;
+
+    return static_cast<float>(
+        (mouseX / width) * 2.0 - 1.0
+    );
+}
 
 
-// ============================================================
-// MOUSE SCROLL CALLBACK
-// ============================================================
-
+// ------------------------------------------------------------
+// Scroll callback
+// ------------------------------------------------------------
 void scrollCallback(
     GLFWwindow* window,
     double xOffset,
     double yOffset)
 {
-    if (waveformPtr == nullptr)
-    {
-        return;
-    }
-
-
-    // Get mouse position
-
     double mouseX;
     double mouseY;
 
@@ -77,85 +94,56 @@ void scrollCallback(
         &mouseY
     );
 
-
-    // Get window size
-
-    int windowWidth;
-    int windowHeight;
-
-    glfwGetWindowSize(
-        window,
-        &windowWidth,
-        &windowHeight
-    );
-
-
-    // Convert mouse X from:
-    //
-    // 0 ---------------- windowWidth
-    //
-    // into:
-    //
-    // -1 ---------------- 1
-
-    float normalizedMouseX =
-        static_cast<float>(
-            (mouseX / windowWidth)
-            * 2.0
-            - 1.0
+    float normalizedX =
+        getNormalizedMouseX(
+            window,
+            mouseX
         );
-
-
-    // Zoom in
 
     if (yOffset > 0)
     {
-        waveformPtr->zoom(
+        waveform.zoom(
             0.8f,
-            normalizedMouseX
+            normalizedX
         );
     }
-
-
-    // Zoom out
-
     else if (yOffset < 0)
     {
-        waveformPtr->zoom(
+        waveform.zoom(
             1.25f,
-            normalizedMouseX
+            normalizedX
         );
     }
 }
 
 
-// ============================================================
-// MOUSE BUTTON CALLBACK
-// ============================================================
+// ------------------------------------------------------------
+// Keyboard callback
+// ------------------------------------------------------------
+void keyCallback(
+    GLFWwindow* window,
+    int key,
+    int scancode,
+    int action,
+    int mods)
+{
+    if (key == GLFW_KEY_Q &&
+        action == GLFW_PRESS)
+    {
+        waveform.snapSelectionEndpoint();
+    }
+}
 
+
+// ------------------------------------------------------------
+// Mouse button callback
+// ------------------------------------------------------------
 void mouseButtonCallback(
     GLFWwindow* window,
     int button,
     int action,
     int mods)
 {
-    if (waveformPtr == nullptr)
-    {
-        return;
-    }
-
-
-    // We only care about the
-    // left mouse button.
-
-    if (button != GLFW_MOUSE_BUTTON_LEFT)
-    {
-        return;
-    }
-
-
-    // Get current mouse position.
-
     double mouseX;
     double mouseY;
 
@@ -165,153 +153,117 @@ void mouseButtonCallback(
         &mouseY
     );
 
-
-    // Get window dimensions.
-
-    int windowWidth;
-    int windowHeight;
-
-    glfwGetWindowSize(
-        window,
-        &windowWidth,
-        &windowHeight
-    );
-
-
-    // Convert mouse X:
-    //
-    // 0 ---------------- windowWidth
-    //
-    // into:
-    //
-    // -1 ---------------- 1
-
-    float normalizedMouseX =
-        static_cast<float>(
-            (mouseX / windowWidth)
-            * 2.0
-            - 1.0
+    float normalizedX =
+        getNormalizedMouseX(
+            window,
+            mouseX
         );
 
 
     // --------------------------------------------------------
-    // Mouse pressed
+    // LEFT MOUSE
+    // Start / finish selection
     // --------------------------------------------------------
-
-    if (action == GLFW_PRESS)
+    if (button == GLFW_MOUSE_BUTTON_LEFT)
     {
-        waveformPtr->startSelection(
-            normalizedMouseX
-        );
+        if (action == GLFW_PRESS)
+        {
+            waveform.startSelection(
+                normalizedX
+            );
+        }
+        else if (action == GLFW_RELEASE)
+        {
+            waveform.finishSelection(
+                normalizedX
+            );
+        }
     }
 
 
     // --------------------------------------------------------
-    // Mouse released
+    // MIDDLE MOUSE
+    // Snap current endpoint
     // --------------------------------------------------------
-
-    else if (action == GLFW_RELEASE)
+    if (button == GLFW_MOUSE_BUTTON_MIDDLE &&
+        action == GLFW_PRESS)
     {
-        waveformPtr->finishSelection(
-            normalizedMouseX
+        waveform.snapSelectionEndpoint();
+    }
+
+
+    // --------------------------------------------------------
+    // RIGHT MOUSE
+    // Delete match or scan
+    // --------------------------------------------------------
+    if (button == GLFW_MOUSE_BUTTON_RIGHT &&
+        action == GLFW_PRESS)
+    {
+        waveform.deleteAtPosition(
+            normalizedX
         );
     }
 }
 
 
-// ============================================================
-// MOUSE MOVEMENT CALLBACK
-// ============================================================
-
+// ------------------------------------------------------------
+// Mouse movement callback
+// ------------------------------------------------------------
 void cursorPositionCallback(
     GLFWwindow* window,
     double mouseX,
     double mouseY)
 {
-    if (waveformPtr == nullptr)
-    {
-        return;
-    }
-
-
-    // Get window dimensions.
-
-    int windowWidth;
-    int windowHeight;
-
-    glfwGetWindowSize(
-        window,
-        &windowWidth,
-        &windowHeight
-    );
-
-
-    // Convert mouse X:
-    //
-    // 0 ---------------- windowWidth
-    //
-    // into:
-    //
-    // -1 ---------------- 1
-
-    float normalizedMouseX =
-        static_cast<float>(
-            (mouseX / windowWidth)
-            * 2.0
-            - 1.0
+    float normalizedX =
+        getNormalizedMouseX(
+            window,
+            mouseX
         );
 
-
-    // Update selection while
-    // the mouse is being dragged.
-
-    waveformPtr->updateSelection(
-        normalizedMouseX
+    waveform.updateSelection(
+        normalizedX
     );
 }
 
 
-// ============================================================
-// MAIN
-// ============================================================
+// ------------------------------------------------------------
+// Window resize callback
+// ------------------------------------------------------------
+void framebufferSizeCallback(
+    GLFWwindow* window,
+    int width,
+    int height)
+{
+    glViewport(
+        0,
+        0,
+        width,
+        height
+    );
 
+    waveform.setWindowWidth(
+        width
+    );
+}
+
+
+// ------------------------------------------------------------
+// Main
+// ------------------------------------------------------------
 int main()
 {
-    // ========================================================
-    // Open WAV file
-    // ========================================================
-
-    std::string filePath = openWavFile();
-
-    if (filePath.empty())
-    {
-        std::cout
-            << "No file selected.\n";
-
-        return 0;
-    }
-
-
-    std::cout
-        << "Selected file: "
-        << filePath
-        << "\n";
-
-
-    // ========================================================
+    // --------------------------------------------------------
     // Initialize GLFW
-    // ========================================================
-
+    // --------------------------------------------------------
     if (!glfwInit())
     {
         std::cerr
-            << "Failed to initialize GLFW\n";
+            << "Failed to initialize GLFW."
+            << std::endl;
 
         return -1;
     }
 
-
-    // OpenGL version 3.3
 
     glfwWindowHint(
         GLFW_CONTEXT_VERSION_MAJOR,
@@ -329,10 +281,9 @@ int main()
     );
 
 
-    // ========================================================
-    // Create OpenGL window
-    // ========================================================
-
+    // --------------------------------------------------------
+    // Create window
+    // --------------------------------------------------------
     GLFWwindow* window =
         glfwCreateWindow(
             1000,
@@ -342,11 +293,11 @@ int main()
             nullptr
         );
 
-
     if (!window)
     {
         std::cerr
-            << "Failed to create GLFW window\n";
+            << "Failed to create GLFW window."
+            << std::endl;
 
         glfwTerminate();
 
@@ -354,146 +305,176 @@ int main()
     }
 
 
-    // Make OpenGL context current.
-
-    glfwMakeContextCurrent(
-        window
-    );
+    glfwMakeContextCurrent(window);
 
 
-    // ========================================================
+    // --------------------------------------------------------
     // Initialize GLAD
-    // ========================================================
-
-    if (!gladLoadGL(
-        (GLADloadfunc)
-        glfwGetProcAddress))
-    {
-        std::cerr
-            << "Failed to initialize GLAD\n";
-
-        glfwDestroyWindow(
-            window
+    // --------------------------------------------------------
+    int version =
+        gladLoadGL(
+            (GLADloadfunc)
+                glfwGetProcAddress
         );
 
+    if (version == 0)
+    {
+        std::cerr
+            << "Failed to initialize GLAD."
+            << std::endl;
+
+        glfwDestroyWindow(window);
         glfwTerminate();
 
         return -1;
     }
 
 
-    // ========================================================
-    // Create waveform renderer
-    // ========================================================
+    // --------------------------------------------------------
+    // Open WAV file
+    // --------------------------------------------------------
+    std::cout
+        << "Select a WAV file..."
+        << std::endl;
 
-    WaveformRenderer waveform;
+    std::string filePath =
+        openFileDialog();
 
+    if (filePath.empty())
+    {
+        std::cout
+            << "No file selected."
+            << std::endl;
+
+        glfwDestroyWindow(window);
+        glfwTerminate();
+
+        return 0;
+    }
+
+
+    // --------------------------------------------------------
+    // Load WAV
+    // --------------------------------------------------------
+    if (!audio.load(filePath))
+    {
+        std::cerr
+            << "Failed to load WAV file."
+            << std::endl;
+
+        glfwDestroyWindow(window);
+        glfwTerminate();
+
+        return -1;
+    }
+
+
+    // --------------------------------------------------------
+    // Print WAV information
+    // --------------------------------------------------------
+    std::cout
+        << "WAV loaded successfully."
+        << std::endl;
+
+    std::cout
+        << "Sample rate: "
+        << audio.getSampleRate()
+        << " Hz"
+        << std::endl;
+
+    std::cout
+        << "Channels: "
+        << audio.getChannels()
+        << std::endl;
+
+    std::cout
+        << "Total samples: "
+        << audio.getSamples().size()
+        << std::endl;
+
+
+    // --------------------------------------------------------
+    // Initialize waveform
+    // --------------------------------------------------------
     waveform.initialize();
 
+    waveform.uploadSamples(
+        audio.getSamples()
+    );
 
-    // Give callbacks access to waveform.
-
-    waveformPtr = &waveform;
+    waveform.setWindowWidth(1000);
 
 
-    // ========================================================
-    // Register mouse callbacks
-    // ========================================================
-
+    // --------------------------------------------------------
+    // Register callbacks
+    // --------------------------------------------------------
     glfwSetScrollCallback(
         window,
         scrollCallback
     );
 
+    glfwSetKeyCallback(
+        window,
+        keyCallback
+    );
 
     glfwSetMouseButtonCallback(
         window,
         mouseButtonCallback
     );
 
-
     glfwSetCursorPosCallback(
         window,
         cursorPositionCallback
     );
 
-
-    // ========================================================
-    // Load WAV
-    // ========================================================
-
-    WavFile audio;
+    glfwSetFramebufferSizeCallback(
+        window,
+        framebufferSizeCallback
+    );
 
 
-    if (audio.load(filePath))
-    {
-        waveform.uploadSamples(
-            audio.getSamples()
-        );
-    }
-    else
-    {
-        std::cerr
-            << "Failed to load WAV file.\n";
-    }
+    // --------------------------------------------------------
+    // OpenGL settings
+    // --------------------------------------------------------
+    glViewport(
+        0,
+        0,
+        1000,
+        700
+    );
+
+    glClearColor(
+        0.05f,
+        0.05f,
+        0.05f,
+        1.0f
+    );
 
 
-    // ========================================================
-    // Main OpenGL loop
-    // ========================================================
-
+    // --------------------------------------------------------
+    // Main loop
+    // --------------------------------------------------------
     while (!glfwWindowShouldClose(window))
     {
-        // ----------------------------------------------------
-        // Clear screen
-        // ----------------------------------------------------
-
-        glClearColor(
-            0.05f,
-            0.05f,
-            0.05f,
-            1.0f
-        );
-
-
         glClear(
             GL_COLOR_BUFFER_BIT
         );
 
-
-        // ----------------------------------------------------
-        // Draw waveform
-        // ----------------------------------------------------
-
         waveform.draw();
 
-
-        // ----------------------------------------------------
-        // Display frame
-        // ----------------------------------------------------
-
-        glfwSwapBuffers(
-            window
-        );
-
-
-        // Process keyboard,
-        // mouse and window events.
+        glfwSwapBuffers(window);
 
         glfwPollEvents();
     }
 
 
-    // ========================================================
+    // --------------------------------------------------------
     // Cleanup
-    // ========================================================
-
-    glfwDestroyWindow(
-        window
-    );
+    // --------------------------------------------------------
+    glfwDestroyWindow(window);
 
     glfwTerminate();
-
 
     return 0;
 }
