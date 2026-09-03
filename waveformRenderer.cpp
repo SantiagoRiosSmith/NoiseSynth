@@ -652,15 +652,27 @@ void WaveformRenderer::pan(
 
 void WaveformRenderer::startSelection(float mouseX)
 {
-    int sample = screenToSample(mouseX);
+    int sample =
+        screenToSample(mouseX);
 
-    temporarySelectionStart = sample;
-    temporarySelectionEnd = sample;
+    temporarySelectionStart =
+        sample;
 
-    currentSelectionSample = sample;
+    temporarySelectionEnd =
+        sample;
 
-    selecting = true;
-    hasTemporarySelection = true;
+    // This is a brand-new selection.
+    startWasSnapped = false;
+    endWasSnapped = false;
+
+    currentSelectionSample =
+        sample;
+
+    selecting =
+        true;
+
+    hasTemporarySelection =
+        true;
 }
 
 
@@ -668,18 +680,27 @@ void WaveformRenderer::startSelection(float mouseX)
 // Update selection
 // ============================================================
 
-void WaveformRenderer::updateSelection(float mouseX)
+void WaveformRenderer::updateSelection(
+    float mouseX
+)
 {
     if (!selecting)
         return;
 
-    int sample = screenToSample(mouseX);
 
-    currentSelectionSample = sample;
+    int sample =
+        screenToSample(mouseX);
+
+
+    currentSelectionSample =
+        sample;
+
 
     // The start stays where it is.
     // The cursor controls the end.
-    temporarySelectionEnd = sample;
+
+    temporarySelectionEnd =
+        sample;
 }
 
 
@@ -687,50 +708,92 @@ void WaveformRenderer::updateSelection(float mouseX)
 // Finish selection
 // ============================================================
 
-void WaveformRenderer::finishSelection(float mouseX)
+void WaveformRenderer::finishSelection(
+    float mouseX
+)
 {
     if (!selecting)
         return;
 
-    int sample = screenToSample(mouseX);
+
+    int sample =
+        screenToSample(mouseX);
+
 
     // The end is wherever the cursor was released.
-    temporarySelectionEnd = sample;
+
+    temporarySelectionEnd =
+        sample;
+
 
     // Snap the END based on its current position.
+
     temporarySelectionEnd =
         findNearestPeakOrTrough(
             temporarySelectionEnd
         );
 
-    int start = std::min(
-        temporarySelectionStart,
-        temporarySelectionEnd
-    );
+    // The END was snapped because the selection was released.
+    endWasSnapped = true;
 
-    int end = std::max(
-        temporarySelectionStart,
-        temporarySelectionEnd
-    );
+
+    int start =
+        std::min(
+            temporarySelectionStart,
+            temporarySelectionEnd
+        );
+
+
+    int end =
+        std::max(
+            temporarySelectionStart,
+            temporarySelectionEnd
+        );
+
 
     if (end - start < 2)
     {
-        selecting = false;
-        hasTemporarySelection = false;
+        selecting =
+            false;
+
+        hasTemporarySelection =
+            false;
+
         return;
     }
 
+
     Scan newScan;
 
-    newScan.selectionStart = start;
-    newScan.selectionEnd = end;
+    newScan.selectionStart =
+        start;
 
-    scanSelection(newScan);
+    newScan.selectionEnd =
+        end;
 
-    scans.push_back(newScan);
+    newScan.startWasSnapped =
+        startWasSnapped;
 
-    selecting = false;
-    hasTemporarySelection = false;
+    newScan.endWasSnapped =
+        endWasSnapped;
+
+    // Automatically search for matches.
+
+    scanSelection(
+        newScan
+    );
+
+
+    scans.push_back(
+        newScan
+    );
+
+
+    selecting =
+        false;
+
+    hasTemporarySelection =
+        false;
 }
 
 
@@ -781,8 +844,6 @@ void WaveformRenderer::scanSelection(
 
     // --------------------------------------------------------
     // Fingerprint structure.
-    //
-    // min/max/avg are normalized for SHAPE comparison.
     // --------------------------------------------------------
 
     struct ShapePoint
@@ -814,7 +875,8 @@ void WaveformRenderer::scanSelection(
         );
 
 
-        float rawMean = 0.0f;
+        float rawMean =
+            0.0f;
 
 
         // First gather raw data.
@@ -881,7 +943,8 @@ void WaveformRenderer::scanSelection(
         // Remove DC offset.
         // ----------------------------------------------------
 
-        float maxAmplitude = 0.0f;
+        float maxAmplitude =
+            0.0f;
 
 
         for (auto& point :
@@ -918,12 +981,10 @@ void WaveformRenderer::scanSelection(
 
         // ----------------------------------------------------
         // Normalize amplitude.
-        //
-        // This is what lets shape matching tolerate
-        // different volume levels.
         // ----------------------------------------------------
 
-        if (maxAmplitude > 0.000001f)
+        if (maxAmplitude >
+            0.000001f)
         {
             for (auto& point :
                  result.points)
@@ -960,7 +1021,8 @@ void WaveformRenderer::scanSelection(
         }
 
 
-        float totalError = 0.0f;
+        float totalError =
+            0.0f;
 
 
         for (size_t i = 0;
@@ -1126,13 +1188,56 @@ void WaveformRenderer::scanSelection(
          sampleCount - minimumLength;
          candidateStart += searchStep)
     {
+        // ----------------------------------------------------
+        // If the START was snapped with Q, the candidate
+        // START must itself be a peak/trough.
+        //
+        // We take the normal search position and move it to
+        // the nearest peak/trough.
+        // ----------------------------------------------------
+
+        int alignedStart =
+            candidateStart;
+
+
+        if (scan.startWasSnapped)
+        {
+            alignedStart =
+                findNearestPeakOrTrough(
+                    candidateStart
+                );
+        }
+
+
+        // Don't go outside the waveform.
+
+        if (alignedStart < 0 ||
+            alignedStart >= sampleCount)
+        {
+            continue;
+        }
+
+
+        // Don't repeatedly test the same snapped point.
+
+        if (alignedStart != candidateStart &&
+            scan.startWasSnapped &&
+            std::abs(
+                alignedStart -
+                candidateStart
+            ) > 500)
+        {
+            continue;
+        }
+
+
         // Don't match the selected region itself.
 
         if (
-            candidateStart <
+            alignedStart <
                 patternEnd
             &&
-            candidateStart +
+            alignedStart +
                 maximumLength >
                 patternStart
         )
@@ -1141,28 +1246,107 @@ void WaveformRenderer::scanSelection(
         }
 
 
-        float bestSimilarity = 0.0f;
+        float bestSimilarity =
+            0.0f;
 
-        int bestEnd = 0;
+        int bestStart =
+            alignedStart;
+
+        int bestEnd =
+            0;
 
 
         for (int candidateLength :
              candidateLengths)
         {
-            if (
-                candidateStart +
-                candidateLength >=
-                sampleCount
-            )
+            int candidateEnd =
+                alignedStart +
+                candidateLength;
+
+
+            if (candidateEnd >=
+                sampleCount)
             {
                 continue;
             }
 
 
+            // ------------------------------------------------
+            // If the END was snapped with Q, move the
+            // candidate END to the corresponding peak/trough.
+            //
+            // The START stays fixed, so the candidate's actual
+            // length becomes the distance to that exact anchor.
+            // ------------------------------------------------
+
+            int alignedEnd =
+                candidateEnd;
+
+
+            if (scan.endWasSnapped)
+            {
+                alignedEnd =
+                    findNearestPeakOrTrough(
+                        candidateEnd
+                    );
+            }
+
+
+            if (alignedEnd <=
+                alignedStart)
+            {
+                continue;
+            }
+
+
+            int actualLength =
+                alignedEnd -
+                alignedStart;
+
+
+            // ------------------------------------------------
+            // When BOTH endpoints were snapped, require the
+            // distance between the two anchors to still be
+            // within our allowed length variation.
+            // ------------------------------------------------
+
+            if (scan.startWasSnapped &&
+                scan.endWasSnapped)
+            {
+                if (actualLength <
+                    minimumLength ||
+                    actualLength >
+                    maximumLength)
+                {
+                    continue;
+                }
+            }
+
+
+            // If only the END was snapped, make sure the
+            // resulting length is still reasonable.
+
+            if (scan.endWasSnapped &&
+                !scan.startWasSnapped)
+            {
+                if (actualLength <
+                    minimumLength ||
+                    actualLength >
+                    maximumLength)
+                {
+                    continue;
+                }
+            }
+
+
+            // If only the START was snapped, the original
+            // candidate length is still being used.
+
+
             Fingerprint candidate =
                 makeFingerprint(
-                    candidateStart,
-                    candidateLength
+                    alignedStart,
+                    actualLength
                 );
 
 
@@ -1179,9 +1363,11 @@ void WaveformRenderer::scanSelection(
                 bestSimilarity =
                     similarity;
 
+                bestStart =
+                    alignedStart;
+
                 bestEnd =
-                    candidateStart +
-                    candidateLength;
+                    alignedEnd;
             }
         }
 
@@ -1192,7 +1378,7 @@ void WaveformRenderer::scanSelection(
             Match match;
 
             match.start =
-                candidateStart;
+                bestStart;
 
             match.end =
                 bestEnd;
@@ -1227,9 +1413,6 @@ void WaveformRenderer::scanSelection(
 
     // --------------------------------------------------------
     // Remove overlapping matches.
-    //
-    // A single area shouldn't produce 10 nearly identical
-    // matches just because the search step moved slightly.
     // --------------------------------------------------------
 
     removeOverlappingMatches(
@@ -1291,7 +1474,8 @@ void WaveformRenderer::removeOverlappingMatches(
     for (const Match& candidate :
          matches)
     {
-        bool overlaps = false;
+        bool overlaps =
+            false;
 
 
         for (const Match& existing :
@@ -1305,7 +1489,9 @@ void WaveformRenderer::removeOverlappingMatches(
                     existing.start
             )
             {
-                overlaps = true;
+                overlaps =
+                    true;
+
                 break;
             }
         }
@@ -1321,7 +1507,9 @@ void WaveformRenderer::removeOverlappingMatches(
 
 
     matches =
-        std::move(result);
+        std::move(
+            result
+        );
 }
 
 
@@ -1496,8 +1684,10 @@ void WaveformRenderer::draw()
             // Don't bother drawing if completely
             // outside the current view.
 
-            if (endX < -1.0f ||
-                startX > 1.0f)
+            if (
+                endX < -1.0f ||
+                startX > 1.0f
+            )
             {
                 continue;
             }
@@ -1606,8 +1796,10 @@ void WaveformRenderer::draw()
             viewSize;
 
 
-        if (endX < -1.0f ||
-            startX > 1.0f)
+        if (
+            endX < -1.0f ||
+            startX > 1.0f
+        )
         {
             continue;
         }
@@ -1729,8 +1921,10 @@ void WaveformRenderer::draw()
     // Draw temporary selection while dragging
     // ========================================================
 
-    if (selecting &&
-        hasTemporarySelection)
+    if (
+        selecting &&
+        hasTemporarySelection
+    )
     {
         float startX =
             -1.0f +
@@ -1761,10 +1955,12 @@ void WaveformRenderer::draw()
 
 
         if (startX > endX)
+        {
             std::swap(
                 startX,
                 endX
             );
+        }
 
 
         startX =
@@ -1901,61 +2097,117 @@ void WaveformRenderer::draw()
     glBindVertexArray(0);
 }
 
-int WaveformRenderer::findNearestPeakOrTrough(int sample) const
+
+// ============================================================
+// Find nearest peak or trough
+// ============================================================
+
+int WaveformRenderer::findNearestPeakOrTrough(
+    int sample
+) const
 {
     if (samples.size() < 3)
         return sample;
 
-    sample = std::max(
-        1,
-        std::min(
-            sample,
-            static_cast<int>(samples.size()) - 2
-        )
-    );
 
-    const int searchRadius = 500;
+    sample =
+        std::max(
+            1,
+            std::min(
+                sample,
+                static_cast<int>(
+                    samples.size()
+                ) - 2
+            )
+        );
+
+
+    const int searchRadius =
+        500;
+
 
     int searchStart =
-        std::max(1, sample - searchRadius);
+        std::max(
+            1,
+            sample -
+            searchRadius
+        );
+
 
     int searchEnd =
         std::min(
-            static_cast<int>(samples.size()) - 2,
-            sample + searchRadius
+            static_cast<int>(
+                samples.size()
+            ) - 2,
+            sample +
+            searchRadius
         );
 
-    int bestIndex = sample;
-    int bestDistance = searchRadius + 1;
 
-    for (int i = searchStart; i <= searchEnd; ++i)
+    int bestIndex =
+        sample;
+
+    int bestDistance =
+        searchRadius + 1;
+
+
+    for (int i = searchStart;
+         i <= searchEnd;
+         ++i)
     {
-        float previous = samples[i - 1];
-        float current = samples[i];
-        float next = samples[i + 1];
+        float previous =
+            samples[i - 1];
+
+        float current =
+            samples[i];
+
+        float next =
+            samples[i + 1];
+
 
         bool isMaximum =
             current >= previous &&
             current >= next;
 
+
         bool isMinimum =
             current <= previous &&
             current <= next;
 
-        if (isMaximum || isMinimum)
-        {
-            int distance = std::abs(i - sample);
 
-            if (distance < bestDistance)
+        if (
+            isMaximum ||
+            isMinimum
+        )
+        {
+            int distance =
+                std::abs(
+                    i - sample
+                );
+
+
+            if (
+                distance <
+                bestDistance
+            )
             {
-                bestDistance = distance;
-                bestIndex = i;
+                bestDistance =
+                    distance;
+
+                bestIndex =
+                    i;
             }
         }
     }
 
+
     return bestIndex;
 }
+
+
+// ============================================================
+// Snap selection endpoint
+// ============================================================
 
 void WaveformRenderer::snapSelectionEndpoint()
 {
@@ -1963,11 +2215,16 @@ void WaveformRenderer::snapSelectionEndpoint()
         return;
 
     // Snap the START point based on where the START
-    // point currently is, not where the cursor is.
+    // point currently is.
+
     temporarySelectionStart =
         findNearestPeakOrTrough(
             temporarySelectionStart
         );
+
+    // Remember that the user explicitly snapped
+    // the START point with Q.
+    startWasSnapped = true;
 
     // Keep the cursor position unchanged so dragging
     // continues normally.

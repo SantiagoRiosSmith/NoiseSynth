@@ -39,6 +39,9 @@ public:
         int selectionStart;
         int selectionEnd;
 
+        bool startWasSnapped;
+        bool endWasSnapped;
+
         std::vector<Match> matches;
     };
 
@@ -83,6 +86,9 @@ private:
 
     int temporarySelectionStart = 0;
     int temporarySelectionEnd = 0;
+
+    bool startWasSnapped = false;
+    bool endWasSnapped = false;
 
     int currentSelectionSample = 0;
 
