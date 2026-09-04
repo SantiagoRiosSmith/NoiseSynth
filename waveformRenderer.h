@@ -24,7 +24,8 @@ public:
 
     void snapSelectionEndpoint();
 
-    // Right-click handling
+    void processPendingScan();
+
     bool deleteAtPosition(float mouseX);
 
     struct Match
@@ -32,6 +33,9 @@ public:
         int start;
         int end;
         float similarity;
+
+        bool startIsLocked;
+        bool endIsLocked;
     };
 
     struct Scan
@@ -81,7 +85,9 @@ private:
     // --------------------------------------------------------
     // Selection state
     // --------------------------------------------------------
+
     bool selecting = false;
+
     bool hasTemporarySelection = false;
 
     int temporarySelectionStart = 0;
@@ -92,22 +98,30 @@ private:
 
     int currentSelectionSample = 0;
 
+    // True after the mouse has been released and the endpoint
+    // can still be changed with Q / middle mouse.
+    bool endpointCanBeAdjusted = false;
+    // The scan whose endpoint is currently adjustable.
+    int activeScanIndex = -1;
+
     // --------------------------------------------------------
-    // Completed scans
+    // Scans
     // --------------------------------------------------------
+
     std::vector<Scan> scans;
 
-    // Converts screen X (-1 to 1) to a sample index.
+    bool pendingScan = false;
+    int pendingScanIndex = -1;
+
     int screenToSample(float mouseX) const;
 
-    // Runs the matching algorithm for a newly created scan.
     void scanSelection(Scan& scan);
 
-    // Removes overlapping duplicate matches.
     void removeOverlappingMatches(
         std::vector<Match>& matches
     );
 
-    // Finds the closest local maximum or minimum.
+    void removeOverlappingMatchesAcrossScans();
+
     int findNearestPeakOrTrough(int sample) const;
 };

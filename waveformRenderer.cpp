@@ -356,11 +356,18 @@ void WaveformRenderer::uploadSamples(
             samples.size()
         );
 
-    if (sampleCount == 0)
+    featureMin.clear();
+    featureMax.clear();
+    featureAvg.clear();
+
+    if (samples.empty())
         return;
 
 
-    // Upload waveform
+    // --------------------------------------------------------
+    // Upload waveform to GPU.
+    // --------------------------------------------------------
+
     glBindBuffer(
         GL_ARRAY_BUFFER,
         VBO
@@ -370,14 +377,17 @@ void WaveformRenderer::uploadSamples(
         GL_ARRAY_BUFFER,
         samples.size() * sizeof(float),
         samples.data(),
-        GL_STATIC_DRAW
+        GL_DYNAMIC_DRAW
+    );
+
+    glBindBuffer(
+        GL_ARRAY_BUFFER,
+        0
     );
 
 
     // --------------------------------------------------------
-    // Build coarse waveform features.
-    //
-    // These make searching a large audio file much faster.
+    // Build feature data for matching.
     // --------------------------------------------------------
 
     int blockCount =
@@ -390,9 +400,17 @@ void WaveformRenderer::uploadSamples(
         FEATURE_BLOCK_SIZE;
 
 
-    featureMin.resize(blockCount);
-    featureMax.resize(blockCount);
-    featureAvg.resize(blockCount);
+    featureMin.resize(
+        blockCount
+    );
+
+    featureMax.resize(
+        blockCount
+    );
+
+    featureAvg.resize(
+        blockCount
+    );
 
 
     for (int block = 0;
@@ -411,50 +429,58 @@ void WaveformRenderer::uploadSamples(
             );
 
 
-        float minValue =
-            samples[start];
+        float minimum =
+            std::numeric_limits<float>::max();
 
-        float maxValue =
-            samples[start];
+        float maximum =
+            std::numeric_limits<float>::lowest();
 
-        float sum = 0.0f;
+        float sum =
+            0.0f;
 
 
         for (int i = start;
              i < end;
              i++)
         {
-            minValue =
+            minimum =
                 std::min(
-                    minValue,
+                    minimum,
                     samples[i]
                 );
 
-            maxValue =
+            maximum =
                 std::max(
-                    maxValue,
+                    maximum,
                     samples[i]
                 );
 
-            sum += samples[i];
+            sum +=
+                samples[i];
         }
 
 
+        int count =
+            end - start;
+
+
         featureMin[block] =
-            minValue;
+            minimum;
 
         featureMax[block] =
-            maxValue;
+            maximum;
 
         featureAvg[block] =
             sum /
             static_cast<float>(
-                end - start
+                count
             );
     }
 
 
-    // Reset view
+    // --------------------------------------------------------
+    // Reset view.
+    // --------------------------------------------------------
 
     viewStart = 0.0f;
 
@@ -467,11 +493,52 @@ void WaveformRenderer::uploadSamples(
         );
 
 
-    // New audio means new scans.
+    // --------------------------------------------------------
+    // Clear previous selections.
+    // --------------------------------------------------------
 
     scans.clear();
 
+    selecting = false;
     hasTemporarySelection = false;
+
+    endpointCanBeAdjusted = false;
+
+    pendingScan = false;
+    pendingScanIndex = -1;
+}
+
+
+// ============================================================
+// Update selection
+// ============================================================
+
+void WaveformRenderer::updateSelection(
+    float mouseX
+)
+{
+    if (!selecting)
+        return;
+
+
+    int sample =
+        screenToSample(mouseX);
+
+
+    currentSelectionSample =
+        sample;
+
+
+    // --------------------------------------------------------
+    // The START stays where it is.
+    //
+    // The END follows the mouse.
+    //
+    // Q / middle mouse does NOT affect the END while dragging.
+    // --------------------------------------------------------
+
+    temporarySelectionEnd =
+        sample;
 }
 
 
@@ -650,10 +717,13 @@ void WaveformRenderer::pan(
 // Start selection
 // ============================================================
 
-void WaveformRenderer::startSelection(float mouseX)
+void WaveformRenderer::startSelection(
+    float mouseX
+)
 {
     int sample =
         screenToSample(mouseX);
+
 
     temporarySelectionStart =
         sample;
@@ -661,46 +731,24 @@ void WaveformRenderer::startSelection(float mouseX)
     temporarySelectionEnd =
         sample;
 
+
+    // --------------------------------------------------------
     // This is a brand-new selection.
+    // --------------------------------------------------------
+
     startWasSnapped = false;
     endWasSnapped = false;
 
-    currentSelectionSample =
-        sample;
-
-    selecting =
-        true;
-
-    hasTemporarySelection =
-        true;
-}
-
-
-// ============================================================
-// Update selection
-// ============================================================
-
-void WaveformRenderer::updateSelection(
-    float mouseX
-)
-{
-    if (!selecting)
-        return;
-
-
-    int sample =
-        screenToSample(mouseX);
+    endpointCanBeAdjusted = false;
 
 
     currentSelectionSample =
         sample;
 
 
-    // The start stays where it is.
-    // The cursor controls the end.
+    selecting = true;
 
-    temporarySelectionEnd =
-        sample;
+    hasTemporarySelection = true;
 }
 
 
@@ -720,21 +768,14 @@ void WaveformRenderer::finishSelection(
         screenToSample(mouseX);
 
 
-    // The end is wherever the cursor was released.
+    // --------------------------------------------------------
+    // The endpoint stays exactly where the mouse was released.
+    //
+    // It does NOT automatically snap.
+    // --------------------------------------------------------
 
     temporarySelectionEnd =
         sample;
-
-
-    // Snap the END based on its current position.
-
-    temporarySelectionEnd =
-        findNearestPeakOrTrough(
-            temporarySelectionEnd
-        );
-
-    // The END was snapped because the selection was released.
-    endWasSnapped = true;
 
 
     int start =
@@ -743,7 +784,6 @@ void WaveformRenderer::finishSelection(
             temporarySelectionEnd
         );
 
-
     int end =
         std::max(
             temporarySelectionStart,
@@ -751,17 +791,26 @@ void WaveformRenderer::finishSelection(
         );
 
 
+    // --------------------------------------------------------
+    // Ignore selections that are too small.
+    // --------------------------------------------------------
+
     if (end - start < 2)
     {
-        selecting =
-            false;
-
-        hasTemporarySelection =
-            false;
+        selecting = false;
+        hasTemporarySelection = false;
+        endpointCanBeAdjusted = false;
 
         return;
     }
 
+
+    // --------------------------------------------------------
+    // Create the scan immediately.
+    //
+    // This means releasing the left mouse button starts the
+    // search exactly as requested.
+    // --------------------------------------------------------
 
     Scan newScan;
 
@@ -775,13 +824,7 @@ void WaveformRenderer::finishSelection(
         startWasSnapped;
 
     newScan.endWasSnapped =
-        endWasSnapped;
-
-    // Automatically search for matches.
-
-    scanSelection(
-        newScan
-    );
+        false;
 
 
     scans.push_back(
@@ -789,11 +832,30 @@ void WaveformRenderer::finishSelection(
     );
 
 
-    selecting =
-        false;
+    activeScanIndex =
+        static_cast<int>(
+            scans.size()
+        ) - 1;
 
-    hasTemporarySelection =
-        false;
+    pendingScanIndex =
+        activeScanIndex;
+
+    pendingScan = true;
+
+
+    // --------------------------------------------------------
+    // The endpoint can now be adjusted with Q / middle mouse.
+    // --------------------------------------------------------
+
+    endpointCanBeAdjusted = true;
+
+
+    selecting = false;
+    hasTemporarySelection = false;
+
+
+    currentSelectionSample =
+        temporarySelectionEnd;
 }
 
 
@@ -1191,9 +1253,6 @@ void WaveformRenderer::scanSelection(
         // ----------------------------------------------------
         // If the START was snapped with Q, the candidate
         // START must itself be a peak/trough.
-        //
-        // We take the normal search position and move it to
-        // the nearest peak/trough.
         // ----------------------------------------------------
 
         int alignedStart =
@@ -1272,11 +1331,8 @@ void WaveformRenderer::scanSelection(
 
 
             // ------------------------------------------------
-            // If the END was snapped with Q, move the
-            // candidate END to the corresponding peak/trough.
-            //
-            // The START stays fixed, so the candidate's actual
-            // length becomes the distance to that exact anchor.
+            // If the END was snapped, move the candidate END
+            // to the nearest peak/trough.
             // ------------------------------------------------
 
             int alignedEnd =
@@ -1306,8 +1362,7 @@ void WaveformRenderer::scanSelection(
 
             // ------------------------------------------------
             // When BOTH endpoints were snapped, require the
-            // distance between the two anchors to still be
-            // within our allowed length variation.
+            // distance between anchors to remain in range.
             // ------------------------------------------------
 
             if (scan.startWasSnapped &&
@@ -1323,8 +1378,10 @@ void WaveformRenderer::scanSelection(
             }
 
 
-            // If only the END was snapped, make sure the
-            // resulting length is still reasonable.
+            // ------------------------------------------------
+            // When only the END is snapped, require the
+            // resulting length to remain reasonable.
+            // ------------------------------------------------
 
             if (scan.endWasSnapped &&
                 !scan.startWasSnapped)
@@ -1337,10 +1394,6 @@ void WaveformRenderer::scanSelection(
                     continue;
                 }
             }
-
-
-            // If only the START was snapped, the original
-            // candidate length is still being used.
 
 
             Fingerprint candidate =
@@ -1386,6 +1439,11 @@ void WaveformRenderer::scanSelection(
             match.similarity =
                 bestSimilarity;
 
+            match.startIsLocked =
+                scan.startWasSnapped;
+
+            match.endIsLocked =
+                scan.endWasSnapped;
 
             scan.matches.push_back(
                 match
@@ -1455,41 +1513,301 @@ void WaveformRenderer::scanSelection(
 
 
 // ============================================================
-// Remove overlapping matches
+// Remove / adjust overlapping matches
 // ============================================================
 
 void WaveformRenderer::removeOverlappingMatches(
     std::vector<Match>& matches
 )
 {
+    constexpr int MIN_MATCH_LENGTH = 32;
+    constexpr int DUPLICATE_TOLERANCE = 10;
+    constexpr float SMALL_OVERLAP_PERCENT = 10.0f;
+
+
     if (matches.empty())
         return;
+
+
+    // --------------------------------------------------------
+    // Sort by similarity.
+    // --------------------------------------------------------
+
+    std::sort(
+        matches.begin(),
+        matches.end(),
+        [](const Match& a,
+           const Match& b)
+        {
+            return a.similarity >
+                   b.similarity;
+        }
+    );
 
 
     std::vector<Match> result;
 
 
-    // Matches are currently sorted by similarity.
+    // --------------------------------------------------------
+    // Process strongest matches first.
+    // --------------------------------------------------------
 
     for (const Match& candidate :
          matches)
     {
-        bool overlaps =
+        bool discardCandidate =
             false;
 
 
-        for (const Match& existing :
-             result)
+        for (size_t i = 0;
+             i < result.size();
+             i++)
         {
-            if (
-                candidate.start <
+            Match& existing =
+                result[i];
+
+
+            // =================================================
+            // EXACT / NEAR DUPLICATE
+            // =================================================
+
+            bool sameStart =
+                std::abs(
+                    candidate.start -
+                    existing.start
+                )
+                <=
+                DUPLICATE_TOLERANCE;
+
+
+            bool sameEnd =
+                std::abs(
+                    candidate.end -
                     existing.end
+                )
+                <=
+                DUPLICATE_TOLERANCE;
+
+
+            if (sameStart &&
+                sameEnd)
+            {
+                discardCandidate =
+                    true;
+
+                break;
+            }
+
+
+            // =================================================
+            // CANDIDATE INSIDE EXISTING
+            // =================================================
+
+            if (
+                candidate.start >=
+                    existing.start
                 &&
-                candidate.end >
+                candidate.end <=
+                    existing.end
+            )
+            {
+                discardCandidate =
+                    true;
+
+                break;
+            }
+
+
+            // =================================================
+            // EXISTING INSIDE CANDIDATE
+            // =================================================
+
+            if (
+                existing.start >=
+                    candidate.start
+                &&
+                existing.end <=
+                    candidate.end
+            )
+            {
+                result.erase(
+                    result.begin() + i
+                );
+
+                i--;
+
+                continue;
+            }
+
+
+            // =================================================
+            // NO OVERLAP
+            // =================================================
+
+            if (
+                candidate.start >=
+                    existing.end
+                ||
+                candidate.end <=
                     existing.start
             )
             {
-                overlaps =
+                continue;
+            }
+
+
+            // =================================================
+            // PARTIAL OVERLAP
+            // =================================================
+
+            int overlapStart =
+                std::max(
+                    candidate.start,
+                    existing.start
+                );
+
+
+            int overlapEnd =
+                std::min(
+                    candidate.end,
+                    existing.end
+                );
+
+
+            int overlapLength =
+                overlapEnd -
+                overlapStart;
+
+
+            if (overlapLength <= 0)
+                continue;
+
+
+            int candidateLength =
+                candidate.end -
+                candidate.start;
+
+
+            int existingLength =
+                existing.end -
+                existing.start;
+
+
+            int shorterLength =
+                std::min(
+                    candidateLength,
+                    existingLength
+                );
+
+
+            float overlapPercent =
+                static_cast<float>(
+                    overlapLength
+                )
+                /
+                static_cast<float>(
+                    shorterLength
+                )
+                *
+                100.0f;
+
+
+            // =================================================
+            // SMALL PARTIAL OVERLAP
+            // =================================================
+
+            if (
+                overlapPercent <=
+                SMALL_OVERLAP_PERCENT
+            )
+            {
+                if (
+                    candidate.start <
+                        existing.start
+                    &&
+                    candidate.end >
+                        existing.start
+                )
+                {
+                    int newEnd =
+                        existing.start;
+
+
+                    int newLength =
+                        newEnd -
+                        candidate.start;
+
+
+                    if (
+                        newLength >=
+                        MIN_MATCH_LENGTH
+                    )
+                    {
+                        Match adjusted =
+                            candidate;
+
+
+                        adjusted.end =
+                            newEnd;
+
+
+                        result.push_back(
+                            adjusted
+                        );
+                    }
+
+
+                    discardCandidate =
+                        true;
+
+                    break;
+                }
+
+
+                if (
+                    existing.start <
+                        candidate.start
+                    &&
+                    existing.end >
+                        candidate.start
+                )
+                {
+                    int newEnd =
+                        candidate.start;
+
+
+                    int newLength =
+                        newEnd -
+                        existing.start;
+
+
+                    if (
+                        newLength >=
+                        MIN_MATCH_LENGTH
+                    )
+                    {
+                        existing.end =
+                            newEnd;
+                    }
+                    else
+                    {
+                        result.erase(
+                            result.begin() + i
+                        );
+                    }
+
+                    break;
+                }
+            }
+
+
+            // =================================================
+            // LARGE PARTIAL OVERLAP
+            // =================================================
+
+            else
+            {
+                discardCandidate =
                     true;
 
                 break;
@@ -1497,19 +1815,571 @@ void WaveformRenderer::removeOverlappingMatches(
         }
 
 
-        if (!overlaps)
+        if (!discardCandidate)
         {
-            result.push_back(
-                candidate
-            );
+            int length =
+                candidate.end -
+                candidate.start;
+
+
+            if (length >=
+                MIN_MATCH_LENGTH)
+            {
+                result.push_back(
+                    candidate
+                );
+            }
         }
+    }
+
+
+    // --------------------------------------------------------
+    // Timeline order.
+    // --------------------------------------------------------
+
+    std::sort(
+        result.begin(),
+        result.end(),
+        [](const Match& a,
+           const Match& b)
+        {
+            if (a.start != b.start)
+                return a.start < b.start;
+
+            return a.end < b.end;
+        }
+    );
+
+
+    // --------------------------------------------------------
+    // Final safety pass.
+    // --------------------------------------------------------
+
+    std::vector<Match> finalResult;
+
+
+    for (const Match& current :
+         result)
+    {
+        if (finalResult.empty())
+        {
+            finalResult.push_back(
+                current
+            );
+
+            continue;
+        }
+
+
+        Match& previous =
+            finalResult.back();
+
+
+        if (
+            current.start >=
+            previous.end
+        )
+        {
+            finalResult.push_back(
+                current
+            );
+
+            continue;
+        }
+
+
+        if (
+            current.end <=
+            previous.end
+        )
+        {
+            continue;
+        }
+
+
+        int newPreviousEnd =
+            current.start;
+
+
+        int previousLength =
+            newPreviousEnd -
+            previous.start;
+
+
+        if (
+            previousLength >=
+            MIN_MATCH_LENGTH
+        )
+        {
+            previous.end =
+                newPreviousEnd;
+        }
+        else
+        {
+            finalResult.pop_back();
+        }
+
+
+        finalResult.push_back(
+            current
+        );
     }
 
 
     matches =
         std::move(
-            result
+            finalResult
         );
+}
+
+
+// ============================================================
+// Remove overlaps across all scans
+// ============================================================
+
+void WaveformRenderer::removeOverlappingMatchesAcrossScans()
+{
+    constexpr int MIN_MATCH_LENGTH = 32;
+    constexpr int DUPLICATE_TOLERANCE = 10;
+    constexpr float SMALL_OVERLAP_PERCENT = 10.0f;
+
+
+    struct GlobalMatch
+    {
+        int scanIndex;
+        Match match;
+    };
+
+
+    std::vector<GlobalMatch> allMatches;
+
+
+    // --------------------------------------------------------
+    // Collect every match.
+    // --------------------------------------------------------
+
+    for (size_t scanIndex = 0;
+         scanIndex < scans.size();
+         scanIndex++)
+    {
+        for (const Match& match :
+             scans[scanIndex].matches)
+        {
+            allMatches.push_back(
+                {
+                    static_cast<int>(scanIndex),
+                    match
+                }
+            );
+        }
+    }
+
+
+    if (allMatches.empty())
+        return;
+
+
+    // --------------------------------------------------------
+    // Strongest matches first.
+    // --------------------------------------------------------
+
+    std::sort(
+        allMatches.begin(),
+        allMatches.end(),
+        [](const GlobalMatch& a,
+           const GlobalMatch& b)
+        {
+            return a.match.similarity >
+                   b.match.similarity;
+        }
+    );
+
+
+    std::vector<GlobalMatch> accepted;
+
+
+    // --------------------------------------------------------
+    // Compare every match.
+    // --------------------------------------------------------
+
+    for (const GlobalMatch& candidate :
+         allMatches)
+    {
+        bool discardCandidate = false;
+
+
+        for (size_t i = 0;
+             i < accepted.size();
+             i++)
+        {
+            GlobalMatch& existing =
+                accepted[i];
+
+
+            int candidateStart =
+                candidate.match.start;
+
+            int candidateEnd =
+                candidate.match.end;
+
+            int existingStart =
+                existing.match.start;
+
+            int existingEnd =
+                existing.match.end;
+
+
+            // =================================================
+            // SAME / NEAR DUPLICATE
+            // =================================================
+
+            bool sameStart =
+                std::abs(
+                    candidateStart -
+                    existingStart
+                )
+                <=
+                DUPLICATE_TOLERANCE;
+
+
+            bool sameEnd =
+                std::abs(
+                    candidateEnd -
+                    existingEnd
+                )
+                <=
+                DUPLICATE_TOLERANCE;
+
+
+            if (sameStart && sameEnd)
+            {
+                discardCandidate = true;
+                break;
+            }
+
+
+            // =================================================
+            // CANDIDATE INSIDE EXISTING
+            // =================================================
+
+            if (
+                candidateStart >= existingStart
+                &&
+                candidateEnd <= existingEnd
+            )
+            {
+                discardCandidate = true;
+                break;
+            }
+
+
+            // =================================================
+            // EXISTING INSIDE CANDIDATE
+            // =================================================
+
+            if (
+                existingStart >= candidateStart
+                &&
+                existingEnd <= candidateEnd
+            )
+            {
+                accepted.erase(
+                    accepted.begin() + i
+                );
+
+                i--;
+
+                continue;
+            }
+
+
+            // =================================================
+            // NO OVERLAP
+            // =================================================
+
+            if (
+                candidateStart >= existingEnd
+                ||
+                candidateEnd <= existingStart
+            )
+            {
+                continue;
+            }
+
+
+            // =================================================
+            // PARTIAL OVERLAP
+            // =================================================
+
+            int overlapStart =
+                std::max(
+                    candidateStart,
+                    existingStart
+                );
+
+
+            int overlapEnd =
+                std::min(
+                    candidateEnd,
+                    existingEnd
+                );
+
+
+            int overlapLength =
+                overlapEnd -
+                overlapStart;
+
+
+            if (overlapLength <= 0)
+                continue;
+
+
+            int candidateLength =
+                candidateEnd -
+                candidateStart;
+
+
+            int existingLength =
+                existingEnd -
+                existingStart;
+
+
+            int shorterLength =
+                std::min(
+                    candidateLength,
+                    existingLength
+                );
+
+
+            float overlapPercent =
+                static_cast<float>(
+                    overlapLength
+                )
+                /
+                static_cast<float>(
+                    shorterLength
+                )
+                *
+                100.0f;
+
+
+            // =================================================
+            // SMALL OVERLAP
+            // =================================================
+
+            if (
+                overlapPercent <=
+                SMALL_OVERLAP_PERCENT
+            )
+            {
+                // Candidate is on the left.
+
+                if (
+                    candidateStart <
+                    existingStart
+                    &&
+                    candidateEnd >
+                    existingStart
+                )
+                {
+                    if (!candidate.match.endIsLocked)
+                    {
+                        int newEnd =
+                            existingStart;
+
+
+                        if (
+                            newEnd -
+                            candidateStart
+                            >=
+                            MIN_MATCH_LENGTH
+                        )
+                        {
+                            GlobalMatch adjusted =
+                                candidate;
+
+                            adjusted.match.end =
+                                newEnd;
+
+                            accepted.push_back(
+                                adjusted
+                            );
+                        }
+
+                        discardCandidate = true;
+                        break;
+                    }
+
+
+                    if (!existing.match.startIsLocked)
+                    {
+                        int newStart =
+                            candidateEnd;
+
+
+                        if (
+                            existingEnd -
+                            newStart
+                            >=
+                            MIN_MATCH_LENGTH
+                        )
+                        {
+                            existing.match.start =
+                                newStart;
+                        }
+
+                        discardCandidate = true;
+                        break;
+                    }
+
+
+                    discardCandidate = true;
+                    break;
+                }
+
+
+                // Existing is on the left.
+
+                if (
+                    existingStart <
+                    candidateStart
+                    &&
+                    existingEnd >
+                    candidateStart
+                )
+                {
+                    if (!existing.match.endIsLocked)
+                    {
+                        int newEnd =
+                            candidateStart;
+
+
+                        if (
+                            newEnd -
+                            existingStart
+                            >=
+                            MIN_MATCH_LENGTH
+                        )
+                        {
+                            existing.match.end =
+                                newEnd;
+                        }
+
+                        continue;
+                    }
+
+
+                    if (!candidate.match.startIsLocked)
+                    {
+                        GlobalMatch adjusted =
+                            candidate;
+
+                        adjusted.match.start =
+                            existingEnd;
+
+                        if (
+                            adjusted.match.end -
+                            adjusted.match.start
+                            >=
+                            MIN_MATCH_LENGTH
+                        )
+                        {
+                            accepted.push_back(
+                                adjusted
+                            );
+                        }
+
+                        discardCandidate = true;
+                        break;
+                    }
+
+
+                    discardCandidate = true;
+                    break;
+                }
+            }
+            else
+            {
+                // Large overlap:
+                // weaker candidate is discarded.
+
+                discardCandidate = true;
+                break;
+            }
+        }
+
+
+        if (!discardCandidate)
+        {
+            int length =
+                candidate.match.end -
+                candidate.match.start;
+
+
+            if (length >= MIN_MATCH_LENGTH)
+            {
+                accepted.push_back(
+                    candidate
+                );
+            }
+        }
+    }
+
+
+    // --------------------------------------------------------
+    // Remove all old matches.
+    // --------------------------------------------------------
+
+    for (Scan& scan :
+         scans)
+    {
+        scan.matches.clear();
+    }
+
+
+    // --------------------------------------------------------
+    // Put cleaned matches back.
+    // --------------------------------------------------------
+
+    for (const GlobalMatch& globalMatch :
+         accepted)
+    {
+        if (
+            globalMatch.scanIndex >= 0
+            &&
+            globalMatch.scanIndex <
+            static_cast<int>(
+                scans.size()
+            )
+        )
+        {
+            scans[
+                globalMatch.scanIndex
+            ].matches.push_back(
+                globalMatch.match
+            );
+        }
+    }
+
+
+    // --------------------------------------------------------
+    // Timeline order.
+    // --------------------------------------------------------
+
+    for (Scan& scan :
+         scans)
+    {
+        std::sort(
+            scan.matches.begin(),
+            scan.matches.end(),
+            [](const Match& a,
+               const Match& b)
+            {
+                return a.start <
+                       b.start;
+            }
+        );
+    }
 }
 
 
@@ -1527,9 +2397,6 @@ bool WaveformRenderer::deleteAtPosition(
 
     // --------------------------------------------------------
     // First look for a MATCH.
-    //
-    // Matches get priority because the original selection
-    // itself does not overlap its own matches.
     // --------------------------------------------------------
 
     for (size_t scanIndex = 0;
@@ -1680,9 +2547,6 @@ void WaveformRenderer::draw()
                 /
                 viewSize;
 
-
-            // Don't bother drawing if completely
-            // outside the current view.
 
             if (
                 endX < -1.0f ||
@@ -1867,7 +2731,7 @@ void WaveformRenderer::draw()
 
 
         // ----------------------------------------------------
-        // Draw selection boundaries as vertical lines.
+        // Draw selection boundaries.
         // ----------------------------------------------------
 
         float lines[] =
@@ -2211,21 +3075,183 @@ int WaveformRenderer::findNearestPeakOrTrough(
 
 void WaveformRenderer::snapSelectionEndpoint()
 {
-    if (!selecting)
+    // ========================================================
+    // WHILE DRAGGING
+    //
+    // Q / middle mouse snaps ONLY the START.
+    // ========================================================
+
+    if (selecting)
+    {
+        temporarySelectionStart =
+            findNearestPeakOrTrough(
+                temporarySelectionStart
+            );
+
+        startWasSnapped = true;
+
+        return;
+    }
+
+
+    // ========================================================
+    // AFTER LEFT CLICK RELEASE
+    //
+    // Q / middle mouse snaps the END.
+    //
+    // If the endpoint has already been manually locked,
+    // ignore further Q / middle mouse presses.
+    // ========================================================
+
+    if (!endpointCanBeAdjusted)
         return;
 
-    // Snap the START point based on where the START
-    // point currently is.
 
-    temporarySelectionStart =
+    if (
+        activeScanIndex < 0 ||
+        activeScanIndex >=
+            static_cast<int>(
+                scans.size()
+            )
+    )
+    {
+        endpointCanBeAdjusted = false;
+        return;
+    }
+
+
+    // --------------------------------------------------------
+    // Snap the endpoint.
+    // --------------------------------------------------------
+    temporarySelectionEnd =
         findNearestPeakOrTrough(
-            temporarySelectionStart
+            temporarySelectionEnd
         );
 
-    // Remember that the user explicitly snapped
-    // the START point with Q.
-    startWasSnapped = true;
 
-    // Keep the cursor position unchanged so dragging
-    // continues normally.
+    endWasSnapped = true;
+
+
+    // --------------------------------------------------------
+    // Determine the new ordered selection.
+    // --------------------------------------------------------
+
+    int start =
+        std::min(
+            temporarySelectionStart,
+            temporarySelectionEnd
+        );
+
+    int end =
+        std::max(
+            temporarySelectionStart,
+            temporarySelectionEnd
+        );
+
+
+    if (end - start < 2)
+    {
+        endpointCanBeAdjusted = false;
+        return;
+    }
+
+
+    // --------------------------------------------------------
+    // IMPORTANT:
+    //
+    // Delete every match produced by the previous version
+    // of this selection.
+    // --------------------------------------------------------
+
+    Scan& scan =
+        scans[activeScanIndex];
+
+
+    scan.matches.clear();
+
+
+    // --------------------------------------------------------
+    // Replace the selection boundaries.
+    // --------------------------------------------------------
+
+    scan.selectionStart =
+        start;
+
+    scan.selectionEnd =
+        end;
+
+    scan.startWasSnapped =
+        startWasSnapped;
+
+    scan.endWasSnapped =
+        true;
+
+
+    // --------------------------------------------------------
+    // Restart the search.
+    // --------------------------------------------------------
+    pendingScanIndex =
+        activeScanIndex;
+
+    pendingScan = true;
+
+
+    // --------------------------------------------------------
+    // The endpoint has now been explicitly locked.
+    //
+    // Further Q / middle mouse presses do nothing.
+    // --------------------------------------------------------
+
+    endpointCanBeAdjusted = false;
+
+
+    currentSelectionSample =
+        temporarySelectionEnd;
+}
+
+
+// ============================================================
+// Process pending scan
+// ============================================================
+
+void WaveformRenderer::processPendingScan()
+{
+    if (!pendingScan)
+        return;
+
+
+    if (
+        pendingScanIndex < 0
+        ||
+        pendingScanIndex >=
+            static_cast<int>(
+                scans.size()
+            )
+    )
+    {
+        pendingScan = false;
+        pendingScanIndex = -1;
+
+        return;
+    }
+
+
+    // --------------------------------------------------------
+    // Search the current version of the selection.
+    // --------------------------------------------------------
+
+    scanSelection(
+        scans[pendingScanIndex]
+    );
+
+
+    // --------------------------------------------------------
+    // Remove overlaps against matches from other scans.
+    // --------------------------------------------------------
+
+    removeOverlappingMatchesAcrossScans();
+
+
+    pendingScan = false;
+    pendingScanIndex = -1;
 }
